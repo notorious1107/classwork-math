@@ -161,6 +161,45 @@ test('页面表单经独立前端代理完成师生全流程（DOM 环境，无�
   });
 });
 
+test('发布自选题型和题量，20 题续做草稿后答对 19 题显示 95 分', async () => {
+  await withPages(async ({ app, page, login }) => {
+    const teacher = await page(); await login(teacher, 'teacher', 'Teacher123!');
+    assert.deepEqual([...teacher.d.querySelector('[name="category"]').options].map(o => o.value), ['add-sub-20', 'mul-div-20', 'mixed-100']);
+    assert.deepEqual([...teacher.d.querySelector('[name="questionCount"]').options].map(o => o.value), ['10', '20', '50']);
+    app.db.prepare("INSERT INTO users(username,name,password_hash,role) SELECT 'pupil','学生',password_hash,'student' FROM users WHERE role='teacher'").run();
+    for (const [category, count] of [['mul-div-20', 20], ['mixed-100', 50]]) {
+      teacher.fill('title', '自选练习'); teacher.fill('category', category); teacher.fill('questionCount', count); teacher.submit('publish-form');
+      await waitFor(() => teacher.d.querySelector('.report-stats'), '发布自选练习');
+      assert.ok(teacher.d.querySelector('summary').textContent.includes(`${count} 题`));
+      assert.equal(teacher.d.querySelectorAll('.question-preview span').length, count);
+      const id = Number(teacher.w.location.hash.split('/').at(-1));
+      if (count === 20) {
+        const student = await page(); await login(student, 'pupil', 'Teacher123!'); student.click('.student-card');
+        await waitFor(() => student.d.querySelector('#answer-form'), '打开 20 题');
+        assert.equal(student.d.querySelector('#progress').max, 20);
+        const questions = JSON.parse(app.db.prepare('SELECT questions FROM assignments WHERE id=?').get(id).questions);
+        questions.slice(0, 12).forEach((q, i) => student.fill(`answer-${i}`, solution(q)));
+        assert.equal(student.d.querySelector('#progress-label').textContent, '已作答 12 / 20 题');
+        student.click('[data-action="save"]');
+        await waitFor(() => student.d.querySelector('#save-state').textContent.includes('草稿保存于'), '保存 12 题');
+        const session = student.session; student.w.close();
+        const resumed = await page(session, `#/assignment/${id}`);
+        assert.equal(resumed.d.querySelectorAll('.equation input').length, 20);
+        assert.equal(resumed.d.querySelector('#answer-11').value, String(solution(questions[11])));
+        assert.equal(resumed.d.querySelector('#answer-12').value, '');
+        questions.forEach((q, i) => resumed.fill(`answer-${i}`, i === 19 ? (solution(q) + 1) % 21 : solution(q)));
+        resumed.submit('answer-form'); resumed.click('#confirm-submit');
+        await waitFor(() => resumed.d.querySelector('.score-stamp'), '20 题批改');
+        assert.equal(resumed.d.querySelector('.score-stamp strong').textContent, '95');
+        assert.ok(resumed.d.querySelector('.result-banner').textContent.includes('19 / 20'));
+        teacher.click('[data-action="refresh"]');
+        await waitFor(() => teacher.d.querySelector('.score-cell')?.textContent === '95', '教师查看 95 分');
+      }
+      teacher.click('.back-link'); await waitFor(() => teacher.d.querySelector('#publish-form'), '返回发布表单');
+    }
+  });
+});
+
 test('INC-001 师生页面显示历史算式、续做混合草稿并回看批改', async () => {
   await withPages(async ({ page, login }) => {
     const teacher = await page(), pupil = await page();

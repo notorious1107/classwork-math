@@ -1,6 +1,6 @@
 import { createServer } from 'node:http';
 import { createHash, randomBytes } from 'node:crypto';
-import { openStore, hashPassword, verifyPassword, publishAssignment, solution, formatExpression, inferCategory } from './store.mjs';
+import { openStore, hashPassword, verifyPassword, publishAssignment, solution, formatExpression, inferCategory, categories, questionCounts } from './store.mjs';
 
 class HttpError extends Error {
   constructor(status, message) { super(message); this.status = status; }
@@ -30,12 +30,12 @@ function textField(value, label, min, max) {
   }
   return value.trim();
 }
-function validateAnswers(answers, complete, answerMax) {
-  if (!Array.isArray(answers) || answers.length !== 10 ||
+function validateAnswers(answers, complete, answerMax, questionCount) {
+  if (!Array.isArray(answers) || answers.length !== questionCount ||
       answers.some(a => a !== null && (!Number.isInteger(a) || a < 0 || a > answerMax))) {
-    fail(400, `请填写 0–${answerMax} 的整数，每份作业共 10 题`);
+    fail(400, `请填写 0–${answerMax} 的整数，本份作业共 ${questionCount} 题`);
   }
-  if (complete && answers.includes(null)) fail(400, '还有题目未作答，请完成全部 10 题再提交');
+  if (complete && answers.includes(null)) fail(400, `还有题目未作答，请完成全部 ${questionCount} 题再提交`);
   return answers;
 }
 
@@ -43,7 +43,7 @@ function readAssignment(row) {
   const questions = JSON.parse(row.questions);
   const category = row.category ?? inferCategory(questions);
   return {
-    id: row.id, title: row.title, createdAt: row.created_at, category,
+    id: row.id, title: row.title, createdAt: row.created_at, category, questionCount: questions.length,
     answerMax: category === 'mixed-100' ? 100 : 20,
     questions, expressions: questions.map(q => formatExpression(q))
   };
@@ -63,7 +63,7 @@ export async function createApp({ dbPath = 'data/classwork.sqlite', teacherPassw
   function studentView(a, studentId) {
     const s = db.prepare('SELECT * FROM submissions WHERE assignment_id=? AND student_id=?').get(a.id, studentId);
     const result = { ...a,
-      answers: s ? JSON.parse(s.answers) : Array(10).fill(null), savedAt: s?.saved_at ?? null,
+      answers: s ? JSON.parse(s.answers) : Array(a.questionCount).fill(null), savedAt: s?.saved_at ?? null,
       submittedAt: s?.submitted_at ?? null, score: s?.score ?? null };
     if (s?.submitted_at) result.results = a.questions.map((q, i) => {
       const correctAnswer = solution(q);
@@ -160,7 +160,11 @@ export async function createApp({ dbPath = 'data/classwork.sqlite', teacherPassw
           requireRole(user, 'teacher');
           const input = await body(req);
           const title = textField(input.title, '作业名称', 1, 60);
-          const id = publishAssignment(db, title);
+          const category = input.category === undefined ? 'add-sub-20' : input.category;
+          const questionCount = input.questionCount === undefined ? 10 : input.questionCount;
+          if (!categories.includes(category)) fail(400, '请选择一种有效题型');
+          if (!questionCounts.includes(questionCount)) fail(400, '题目数量请选择 10、20 或 50 道');
+          const id = publishAssignment(db, title, { category, questionCount });
           return send(201, report(assignment(id)));
         }
       }
@@ -182,8 +186,9 @@ export async function createApp({ dbPath = 'data/classwork.sqlite', teacherPassw
             fail(409, '作业已提交，不能再修改答案');
           }
           const input = await body(req);
-          const answers = validateAnswers(input.answers, action === 'submit', a.answerMax);
-          const score = action === 'submit' ? a.questions.reduce((sum, q, i) => sum + (solution(q) === answers[i] ? 10 : 0), 0) : null;
+          const answers = validateAnswers(input.answers, action === 'submit', a.answerMax, a.questionCount);
+          const correct = a.questions.filter((q, i) => solution(q) === answers[i]).length;
+          const score = action === 'submit' ? correct * 100 / a.questionCount : null;
           const savedAt = now();
           const written = db.prepare(`INSERT INTO submissions(assignment_id,student_id,answers,saved_at,submitted_at,score)
             VALUES(?,?,?,?,?,?) ON CONFLICT(assignment_id,student_id) DO UPDATE SET

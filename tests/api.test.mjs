@@ -20,6 +20,74 @@ test('题目符合范围、配比与去重规则', () => {
   }
 });
 
+test('三种题型的所有题量均为不重复整数题，混合题包含四则与括号', () => {
+  const evaluate = (q, max, ops) => {
+    if (typeof q === 'number') { assert.ok(Number.isInteger(q) && q >= 0 && q <= max); return q; }
+    ops.add(q.op);
+    const a = evaluate(q.a, max, ops), b = evaluate(q.b, max, ops);
+    if (q.op === '/') assert.notEqual(b, 0);
+    const value = ({ '+': () => a + b, '-': () => a - b, '*': () => a * b, '/': () => a / b })[q.op]();
+    assert.ok(Number.isInteger(value) && value >= 0 && value <= max);
+    return value;
+  };
+  for (const category of ['add-sub-20', 'mul-div-20', 'mixed-100']) {
+    for (const count of [10, 20, 50]) for (let round = 0; round < 20; round++) {
+      const questions = generateQuestions(category, count), ops = new Set();
+      assert.equal(questions.length, count);
+      assert.equal(new Set(questions.map(q => JSON.stringify(q))).size, count);
+      for (const q of questions) evaluate(q, category === 'mixed-100' ? 100 : 20, ops);
+      assert.deepEqual([...ops].sort(), (category === 'add-sub-20' ? ['+', '-'] : category === 'mul-div-20' ? ['*', '/'] : ['+', '-', '*', '/']).sort());
+      if (category !== 'mixed-100') assert.equal(questions.filter(q => q.op === (category === 'add-sub-20' ? '+' : '*')).length, count / 2);
+      else assert.ok(questions.every(q => typeof q.a === 'object' || typeof q.b === 'object'));
+    }
+  }
+});
+
+test('可选题型题量：12/20 草稿重启恢复、比例评分及错误参数', async t => {
+  const dir = await mkdtemp(join(tmpdir(), 'classwork-options-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  let app, request, login;
+  const start = async () => {
+    app = await createApp({ dbPath: join(dir, 'test.sqlite') });
+    await new Promise(resolve => app.server.listen(0, '127.0.0.1', resolve));
+    ({ request, login } = apiClient(`http://127.0.0.1:${app.server.address().port}`));
+  };
+  const stop = async () => { app.server.closeAllConnections(); await new Promise(resolve => app.server.close(resolve)); app.db.close(); };
+  await start();
+  try {
+    const teacher = await login('teacher', 'Teacher123!');
+    await request('/api/students', { method: 'POST', cookie: teacher, data: { username: 'pupil', name: '学生', password: 'Student123!' } });
+    const pupil = await login('pupil', 'Student123!');
+    for (const input of [{ category: 'other' }, { category: ['add-sub-20'] }, { category: null }, { questionCount: 12 }, { questionCount: '20' }, { questionCount: null }]) {
+      assert.equal((await request('/api/assignments', { method: 'POST', cookie: teacher, data: { title: '无效', ...input } })).status, 400);
+    }
+    for (const category of ['add-sub-20', 'mul-div-20', 'mixed-100']) for (const questionCount of [10, 20, 50]) {
+      const published = await request('/api/assignments', { method: 'POST', cookie: teacher, data: { title: '自选练习', category, questionCount } });
+      assert.equal(published.status, 201);
+      assert.equal(published.body.category, category); assert.equal(published.body.questionCount, questionCount);
+      const path = `/api/assignments/${published.body.id}`;
+      const view = (await request(path, { cookie: pupil })).body;
+      assert.equal(view.answers.length, questionCount); assert.equal(view.results, undefined);
+      assert.deepEqual(view.expressions, published.body.expressions);
+      const answers = published.body.questions.map(solution);
+      if (questionCount === 20) {
+        const partial = answers.map((value, i) => i < 12 ? value : null);
+        assert.equal((await request(path + '/draft', { method: 'PUT', cookie: pupil, data: { answers: partial } })).status, 200);
+        await stop(); await start();
+        assert.deepEqual((await request(path, { cookie: pupil })).body.answers, partial);
+        assert.equal((await request(path + '/submit', { method: 'POST', cookie: pupil, data: { answers: partial } })).status, 400);
+      }
+      assert.equal((await request(path + '/draft', { method: 'PUT', cookie: pupil, data: { answers: Array(questionCount === 10 ? 20 : 10).fill(null) } })).status, 400);
+      answers[0] = (answers[0] + 1) % (view.answerMax + 1);
+      const marked = await request(path + '/submit', { method: 'POST', cookie: pupil, data: { answers, score: 100 } });
+      assert.equal(marked.status, 200); assert.equal(marked.body.score, { 10: 90, 20: 95, 50: 98 }[questionCount]);
+      assert.equal(marked.body.results.filter(r => r.correct).length, questionCount - 1);
+      const report = (await request(path + '/report', { cookie: teacher })).body;
+      assert.equal(report.average, marked.body.score); assert.equal(report.submitted, 1);
+    }
+  } finally { await stop(); }
+});
+
 function apiClient(base) {
   async function request(path, { method = 'GET', data, cookie, headers = {} } = {}) {
     const res = await fetch(base + path, { method, headers: {
@@ -126,7 +194,9 @@ test('真实 HTTP 师生流程、权限、统计与重启持久化', async t => 
       await request(`/api/assignments/${id}/draft`, { method: 'PUT', cookie: carol, data: { answers: [1, ...Array(9).fill(null)] } });
     });
     await t.test('重开无类别列的首版旧库，保留账号、会话、题目、草稿及成绩', async () => {
+      app.db.exec('ALTER TABLE assignments DROP COLUMN category');
       const before = snapshot(app.db);
+      before.assignments.forEach(a => { a.category = null; });
       assert.ok(!app.db.prepare('PRAGMA table_info(assignments)').all().some(column => column.name === 'category'));
       await stop(); await start();
       assert.deepEqual(snapshot(app.db), before);

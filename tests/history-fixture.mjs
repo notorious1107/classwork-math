@@ -38,8 +38,7 @@ export function snapshot(db) {
 export async function createHistoryClass(path) {
   const db = await openStore(path, teacherPassword);
   try {
-    db.exec(`ALTER TABLE assignments ADD COLUMN category TEXT NOT NULL DEFAULT 'add-sub-20';
-      ALTER TABLE assignments ADD COLUMN due_at TEXT;`);
+    db.exec(`ALTER TABLE assignments ADD COLUMN due_at TEXT;`);
     const insertUser = db.prepare("INSERT INTO users(id, username, name, password_hash, role) VALUES(?,?,?,?, 'student')");
     for (const id of [2, 3, 4]) {
       insertUser.run(id, `pupil${id}`, `同学${id}`, await hashPassword(studentPassword));

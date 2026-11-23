@@ -59,9 +59,9 @@ export function generateQuestions(category = 'add-sub-20', questionCount = 10) {
   return questions;
 }
 
-export function publishAssignment(db, title, { category = 'add-sub-20', questionCount = 10 } = {}) {
-  const result = db.prepare('INSERT INTO assignments(title,questions,created_at,category) VALUES(?,?,?,?)')
-    .run(title, JSON.stringify(generateQuestions(category, questionCount)), new Date().toISOString(), category);
+export function publishAssignment(db, title, { category = 'add-sub-20', questionCount = 10, dueAt = null } = {}) {
+  const result = db.prepare('INSERT INTO assignments(title,questions,created_at,category,due_at) VALUES(?,?,?,?,?)')
+    .run(title, JSON.stringify(generateQuestions(category, questionCount)), new Date().toISOString(), category, dueAt);
   return Number(result.lastInsertRowid);
 }
 
@@ -125,6 +125,9 @@ export async function openStore(path, teacherPassword = 'Teacher123!') {
   `);
   if (!db.prepare("SELECT 1 FROM pragma_table_info('assignments') WHERE name='category'").get()) {
     db.exec('ALTER TABLE assignments ADD COLUMN category TEXT');
+  }
+  if (!db.prepare("SELECT 1 FROM pragma_table_info('assignments') WHERE name='due_at'").get()) {
+    db.exec('ALTER TABLE assignments ADD COLUMN due_at TEXT');
   }
   if (!db.prepare("SELECT id FROM users WHERE role='teacher'").get()) {
     db.prepare('INSERT INTO users(username,name,password_hash,role) VALUES(?,?,?,?)')

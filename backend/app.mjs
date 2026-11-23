@@ -8,7 +8,6 @@ class HttpError extends Error {
 const fail = (status, message) => { throw new HttpError(status, message); };
 const safeUser = u => ({ id: u.id, username: u.username, name: u.name, role: u.role });
 const digest = token => createHash('sha256').update(token).digest('hex');
-const now = () => new Date().toISOString();
 const cookie = (value, age) => `classwork_session=${value}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${age}`;
 
 async function body(req) {
@@ -39,19 +38,37 @@ function validateAnswers(answers, complete, answerMax, questionCount) {
   return answers;
 }
 
+function validateDueAt(value, currentTime) {
+  if (value === undefined || value === null || value === '') return null;
+  // Require an explicit timezone, and reject dates that Date.parse would silently roll over.
+  const match = typeof value === 'string' && value.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d{1,3}))?)?(Z|[+-]\d{2}:\d{2})$/);
+  if (!match) fail(400, '截止时间格式无效，请填写带时区的日期时间');
+  const [, year, month, day, hour, minute, second = '0', , zone] = match;
+  const y = Number(year), m = Number(month), d = Number(day);
+  const days = [31, y % 4 === 0 && (y % 100 !== 0 || y % 400 === 0) ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+  const stamp = Date.parse(value);
+  if (y < 1 || m < 1 || m > 12 || d < 1 || d > days[m - 1] || Number(hour) > 23 || Number(minute) > 59 || Number(second) > 59 ||
+      (zone !== 'Z' && (Number(zone.slice(1, 3)) > 23 || Number(zone.slice(4)) > 59)) || !Number.isFinite(stamp)) {
+    fail(400, '截止时间不是有效的日期时间');
+  }
+  if (stamp <= currentTime) fail(400, '截止时间须晚于当前时间（北京时间）');
+  return new Date(stamp).toISOString();
+}
+
 function readAssignment(row) {
   const questions = JSON.parse(row.questions);
   const category = row.category ?? inferCategory(questions);
   return {
-    id: row.id, title: row.title, createdAt: row.created_at, category, questionCount: questions.length,
+    id: row.id, title: row.title, createdAt: row.created_at, category, questionCount: questions.length, dueAt: row.due_at ?? null,
     answerMax: category === 'mixed-100' ? 100 : 20,
     questions, expressions: questions.map(q => formatExpression(q))
   };
 }
 
-export async function createApp({ dbPath = 'data/classwork.sqlite', teacherPassword, logger = console } = {}) {
+export async function createApp({ dbPath = 'data/classwork.sqlite', teacherPassword, logger = console, clock = Date.now } = {}) {
   const db = await openStore(dbPath, teacherPassword);
   const attempts = new Map();
+  const isClosed = a => a.dueAt !== null && clock() >= Date.parse(a.dueAt);
   function requireRole(user, role) {
     if (user.role !== role) fail(403, '当前账号无权执行此操作');
   }
@@ -62,7 +79,7 @@ export async function createApp({ dbPath = 'data/classwork.sqlite', teacherPassw
   }
   function studentView(a, studentId) {
     const s = db.prepare('SELECT * FROM submissions WHERE assignment_id=? AND student_id=?').get(a.id, studentId);
-    const result = { ...a,
+    const result = { ...a, isClosed: isClosed(a),
       answers: s ? JSON.parse(s.answers) : Array(a.questionCount).fill(null), savedAt: s?.saved_at ?? null,
       submittedAt: s?.submitted_at ?? null, score: s?.score ?? null };
     if (s?.submitted_at) result.results = a.questions.map((q, i) => {
@@ -79,7 +96,7 @@ export async function createApp({ dbPath = 'data/classwork.sqlite', teacherPassw
         submittedAt: s.submitted_at ?? null, savedAt: s.saved_at ?? null, score: s.score ?? null
       }));
     const submitted = students.filter(s => s.submittedAt);
-    return { ...a,
+    return { ...a, isClosed: isClosed(a),
       students, total: students.length, submitted: submitted.length,
       pending: students.length - submitted.length,
       average: submitted.length ? Math.round(submitted.reduce((sum, s) => sum + s.score, 0) / submitted.length * 10) / 10 : null };
@@ -164,7 +181,8 @@ export async function createApp({ dbPath = 'data/classwork.sqlite', teacherPassw
           const questionCount = input.questionCount === undefined ? 10 : input.questionCount;
           if (!categories.includes(category)) fail(400, '请选择一种有效题型');
           if (!questionCounts.includes(questionCount)) fail(400, '题目数量请选择 10、20 或 50 道');
-          const id = publishAssignment(db, title, { category, questionCount });
+          const dueAt = validateDueAt(input.dueAt, clock());
+          const id = publishAssignment(db, title, { category, questionCount, dueAt });
           return send(201, report(assignment(id)));
         }
       }
@@ -186,10 +204,20 @@ export async function createApp({ dbPath = 'data/classwork.sqlite', teacherPassw
             fail(409, '作业已提交，不能再修改答案');
           }
           const input = await body(req);
+          // A request may wait for its body while another request submits this work.
+          const latest = studentView(a, user.id);
+          if (latest.submittedAt) {
+            if (action === 'submit') return send(200, latest);
+            fail(409, '作业已提交，不能再修改答案');
+          }
           const answers = validateAnswers(input.answers, action === 'submit', a.answerMax, a.questionCount);
           const correct = a.questions.filter((q, i) => solution(q) === answers[i]).length;
           const score = action === 'submit' ? correct * 100 / a.questionCount : null;
-          const savedAt = now();
+          const stamp = clock();
+          if (action === 'submit' && a.dueAt !== null && stamp >= Date.parse(a.dueAt)) {
+            fail(409, '作业已截止，不能再提交；仍可保存草稿，老师处计为未交');
+          }
+          const savedAt = new Date(stamp).toISOString();
           const written = db.prepare(`INSERT INTO submissions(assignment_id,student_id,answers,saved_at,submitted_at,score)
             VALUES(?,?,?,?,?,?) ON CONFLICT(assignment_id,student_id) DO UPDATE SET
             answers=excluded.answers,saved_at=excluded.saved_at,submitted_at=excluded.submitted_at,score=excluded.score

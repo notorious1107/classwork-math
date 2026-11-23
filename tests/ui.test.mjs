@@ -18,11 +18,11 @@ const waitFor = async (predicate, label) => {
     await new Promise(resolve => setTimeout(resolve, 10));
   }
 };
-async function withPages(run, seed) {
+async function withPages(run, seed, options = {}) {
   const dir = await mkdtemp(join(tmpdir(), 'classwork-ui-'));
   const dbPath = join(dir, 'ui.sqlite');
   if (seed) await seed(dbPath);
-  const app = await createApp({ dbPath });
+  const app = await createApp({ dbPath, ...options });
   await new Promise(resolve => app.server.listen(0, '127.0.0.1', resolve));
   const web = createWebServer({ apiPort: app.server.address().port });
   await new Promise(resolve => web.listen(0, '127.0.0.1', resolve));
@@ -31,6 +31,7 @@ async function withPages(run, seed) {
   async function page(session = { cookie: '' }, hash = '#/') {
     const dom = new JSDOM(html, { url: base + '/' + hash, runScripts: 'outside-only' });
     const w = dom.window; windows.push(w);
+    if (session.now) w.Date.now = session.now;
     w.scrollTo = () => {};
     w.confirm = () => true;
     w.HTMLDialogElement.prototype.showModal = function () { this.open = true; };
@@ -198,6 +199,68 @@ test('发布自选题型和题量，20 题续做草稿后答对 19 题显示 95 
       teacher.click('.back-link'); await waitFor(() => teacher.d.querySelector('#publish-form'), '返回发布表单');
     }
   });
+});
+
+test('北京时间发布、页面到点保留答案、逾期存草稿和已交回看', async () => {
+  const boundary = Date.parse('2026-11-24T12:00:00Z');
+  let currentTime = boundary - 60_000;
+  await withPages(async ({ app, page, login }) => {
+    const teacher = await page({ cookie: '', now: () => currentTime }); await login(teacher, 'teacher', 'Teacher123!');
+    assert.equal(teacher.d.querySelector('[name="dueAt"]').type, 'datetime-local');
+    for (const username of ['early', 'late', 'stale']) app.db.prepare("INSERT INTO users(username,name,password_hash,role) SELECT ?,?,password_hash,'student' FROM users WHERE role='teacher'").run(username, username);
+    teacher.fill('title', '明晚八点前交'); teacher.fill('questionCount', 20);
+    teacher.fill('dueAt', '2026-11-23T20:00'); teacher.submit('publish-form');
+    await waitFor(() => teacher.d.querySelector('#publish-error').textContent.includes('晚于当前时间'), '拒绝过去截止时间');
+    teacher.fill('dueAt', '2026-11-24T20:00'); teacher.submit('publish-form');
+    await waitFor(() => teacher.d.querySelector('.report-stats'), '发布带截止时间作业');
+    assert.ok(teacher.d.querySelector('.page-title p').textContent.includes('20:00（北京时间）'));
+    const id = Number(teacher.w.location.hash.split('/').at(-1));
+    assert.equal(app.db.prepare('SELECT due_at FROM assignments WHERE id=?').get(id).due_at, '2026-11-24T12:00:00.000Z');
+    const questions = JSON.parse(app.db.prepare('SELECT questions FROM assignments WHERE id=?').get(id).questions);
+    const early = await page({ cookie: '', now: () => currentTime }); await login(early, 'early', 'Teacher123!'); early.click('.student-card');
+    await waitFor(() => early.d.querySelector('#answer-form'), '截止前打开作业');
+    questions.forEach((q, i) => early.fill(`answer-${i}`, solution(q)));
+    early.submit('answer-form'); early.click('#confirm-submit');
+    await waitFor(() => early.d.querySelector('.score-stamp'), '提前提交');
+    const late = await page({ cookie: '', now: () => currentTime }); await login(late, 'late', 'Teacher123!'); late.click('.student-card');
+    await waitFor(() => late.d.querySelector('#answer-form'), '未交学生打开作业');
+    questions.slice(0, 12).forEach((q, i) => late.fill(`answer-${i}`, solution(q)));
+    late.submit('answer-form'); assert.equal(late.d.querySelector('dialog').open, true);
+    const stale = await page({ cookie: '', now: () => boundary - 60_000 }); await login(stale, 'stale', 'Teacher123!'); stale.click('.student-card');
+    await waitFor(() => stale.d.querySelector('#answer-form'), '时钟慢的学生打开作业');
+    questions.forEach((q, i) => stale.fill(`answer-${i}`, solution(q)));
+    currentTime = boundary;
+    stale.submit('answer-form'); stale.click('#confirm-submit');
+    await waitFor(() => stale.d.querySelector('#answer-error').textContent.includes('已截止'), '服务器拒绝逾期提交');
+    assert.equal(stale.d.querySelector('[data-submit]').disabled, true);
+    assert.equal(stale.d.querySelector('#answer-19').value, String(solution(questions[19])));
+    await waitFor(() => late.d.querySelector('[data-submit]').disabled, '页面到点禁用提交');
+    assert.equal(late.d.querySelector('dialog').open, false);
+    assert.equal(late.d.querySelector('#deadline-state').hidden, false);
+    assert.equal(late.d.querySelector('#answer-11').value, String(solution(questions[11])));
+    assert.equal(late.d.querySelector('#answer-12').disabled, false);
+    late.session.failPath = '/draft'; late.click('[data-action="save"]');
+    await waitFor(() => late.d.querySelector('#answer-error').textContent.includes('连接失败'), '逾期断网草稿重试');
+    assert.equal(late.d.querySelector('[data-submit]').disabled, true);
+    late.session.failPath = ''; late.click('[data-action="save"]');
+    await waitFor(() => late.d.querySelector('#save-state').textContent.includes('草稿保存于'), '逾期保存草稿');
+    const session = late.session; late.w.close();
+    const resumed = await page(session, `#/assignment/${id}`);
+    assert.equal(resumed.d.querySelector('#answer-11').value, String(solution(questions[11])));
+    assert.equal(resumed.d.querySelector('[data-submit]').disabled, true);
+    assert.ok(resumed.d.querySelector('#deadline-state').textContent.includes('老师处计为未交'));
+    teacher.click('[data-action="refresh"]');
+    await waitFor(() => teacher.d.querySelector('.badge.overdue'), '教师刷新逾期状态');
+    assert.deepEqual([...teacher.d.querySelectorAll('.report-stats strong')].map(n => n.firstChild.textContent), ['1', '2', '100']);
+    const earlySession = early.session; early.w.close();
+    const graded = await page(earlySession, `#/assignment/${id}`);
+    assert.equal(graded.d.querySelector('.score-stamp strong').textContent, '100');
+    assert.equal(graded.d.querySelectorAll('.correct').length, 20);
+    assert.equal(graded.d.querySelector('[data-action="save"]'), null);
+    resumed.click('.back-link'); await waitFor(() => resumed.d.querySelector('.student-card'), '回列表查看截止状态');
+    assert.ok(resumed.d.querySelector('.badge').textContent.includes('已截止'));
+    assert.ok(resumed.d.querySelector('.page-title p').textContent.includes('已截止未交'));
+  }, undefined, { clock: () => currentTime });
 });
 
 test('INC-001 师生页面显示历史算式、续做混合草稿并回看批改', async () => {

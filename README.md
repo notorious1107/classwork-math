@@ -117,6 +117,12 @@ npm start
 
 ## 验证
 
+教师预览 API：POST /api/assignment-previews 接收原发布设置并保存本教师的一份预览，GET /api/assignment-previews/current 恢复当前预览，POST /api/assignment-previews/:previewId/publish 确认发布服务端保存的原题及题序。换卷生成新编号，旧编号不能发布；确认重复请求返回同一作业。预览不进入作业列表，学生无权访问预览接口。确认时重新检查截止时间和接收班级。原 POST /api/assignments 保留给已有客户端使用。
+
+专项可选 basic / advanced。基础加减全部不进退位，提高加减全部练进位、退位；基础乘除使用 0、1、2、5、10 等熟悉口诀和对应除法，提高乘除优先选择两因数均至少为 3 的口诀，之后用其他非平凡口诀补足，排除乘 0/1、除 1 和同数相除，50 题仍不重复。category=composite 时 selectedCategories 勾选原三类中的两类或三类，按加减、乘除、混合顺序均分并分配余题，20 题三类为 7/7/6；含混合时沿用已学知识点和混合难度。保存每题所属题型，答案范围分别按专项 0–20、混合 0–100 校验，整张卷仍按答对比例计 100 分。
+
+启动时给作业追加可空的题型构成字段，并接续 assignment_previews 表。旧表可用教师主键、文本预览主键或整数主键；读取现有预览编号、题目和已发布作业关联，必要时只补可空字段，不重建旧表或重出旧题。tests/previews.test.mjs 用三种独立合成旧表核对继续预览、换卷、确认发布、原已发作业回看及原题草稿成绩保留，并验证最终题序一致、预览隔离、截止过期与重复确认。
+
 ```powershell
 npm ci --cache .runtime/npm-cache
 npm run check

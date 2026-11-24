@@ -1,4 +1,5 @@
 import { test } from 'node:test';
+import { DatabaseSync } from 'node:sqlite';
 import assert from 'node:assert/strict';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -23,6 +24,42 @@ async function withBook(run, seed) {
   try { await run({ db: app.db, request, login, restart: async () => { await stop(); await start(); return app.db; } }); }
   finally { await stop(); await rm(dir, { recursive: true, force: true }); }
 }
+
+test('沿用旧订正表，逐题接续编号并保留原答案、时间和请求记录', async () => {
+  const requests = '/mistakes/33/1/attempts';
+  await withBook(async ({ request, login, restart }) => {
+    const pupil = await login('pupil3', studentPassword);
+    const history = await request(requests, pupil);
+    assert.equal(history.status, 200);
+    assert.deepEqual(history.body.map(a => [a.attemptNumber, a.answer, a.submittedAt]), [
+      [1, 0, '2026-10-01T08:00:00Z'], [2, 27, '2026-10-02T08:00:00Z']
+    ]);
+    const again = await request(requests, pupil, 'POST', { answer: 27, requestId: 'legacy-request-002' });
+    assert.equal(again.status, 200);
+    assert.equal(again.body.attempt.attemptNumber, 2);
+    const next = await request(requests, pupil, 'POST', { answer: 27, requestId: 'review-attempt-003' });
+    assert.equal(next.status, 201);
+    assert.equal(next.body.attempt.attemptNumber, 3);
+    const reopened = await restart();
+    assert.equal((await request(requests, pupil)).body.length, 3);
+    assert.deepEqual(reopened.prepare('PRAGMA foreign_key_check').all(), []);
+  }, async path => {
+    await createHistoryClass(path);
+    const db = new DatabaseSync(path);
+    try {
+      db.exec(`CREATE TABLE correction_attempts (
+        id INTEGER PRIMARY KEY, student_id INTEGER NOT NULL REFERENCES users(id),
+        assignment_id INTEGER NOT NULL REFERENCES assignments(id), question_number INTEGER NOT NULL CHECK(question_number > 0),
+        answer INTEGER NOT NULL, correct INTEGER NOT NULL CHECK(correct IN (0,1)), created_at TEXT NOT NULL,
+        request_key TEXT NOT NULL, UNIQUE(student_id,request_key),
+        FOREIGN KEY(assignment_id,student_id) REFERENCES submissions(assignment_id,student_id)
+      );`);
+      const add = db.prepare('INSERT INTO correction_attempts VALUES (NULL,3,33,1,?,?,?,?)');
+      add.run(0, 0, '2026-10-01T08:00:00Z', 'legacy-request-001');
+      add.run(27, 1, '2026-10-02T08:00:00Z', 'legacy-request-002');
+    } finally { db.close(); }
+  });
+});
 
 test('订正逐步讲解遵循可见括号、乘除优先和从左往右，保留原题', () => {
   const original = structuredClone(correctionQuestions);

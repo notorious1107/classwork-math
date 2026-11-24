@@ -46,9 +46,9 @@ export function mistakeSource(db, studentId, assignmentId, questionNumber) {
   return { row, question: questions[index], originalAnswer: answers[index], category: row.category ?? inferCategory(questions) };
 }
 export function correctionHistory(db, studentId, assignmentId, questionNumber) {
-  return db.prepare(`SELECT attempt_number,answer,correct,submitted_at FROM correction_attempts
+  return db.prepare(`SELECT attempt_number,answer,correct,created_at FROM correction_attempts
     WHERE student_id=? AND assignment_id=? AND question_number=? ORDER BY attempt_number`).all(studentId, assignmentId, questionNumber)
-    .map(r => ({ attemptNumber: r.attempt_number, answer: r.answer, correct: !!r.correct, submittedAt: r.submitted_at }));
+    .map(r => ({ attemptNumber: r.attempt_number, answer: r.answer, correct: !!r.correct, submittedAt: r.created_at }));
 }
 export function correctionQuestion(db, studentId, assignmentId, questionNumber) {
   const source = mistakeSource(db, studentId, assignmentId, questionNumber);
@@ -84,13 +84,13 @@ export function submitCorrection(db, studentId, assignmentId, questionNumber, in
   let created = false, attemptNumber;
   db.exec('BEGIN IMMEDIATE');
   try {
-    const existing = db.prepare('SELECT * FROM correction_attempts WHERE student_id=? AND request_id=?').get(studentId, input.requestId);
+    const existing = db.prepare('SELECT * FROM correction_attempts WHERE student_id=? AND request_key=?').get(studentId, input.requestId);
     if (existing) {
       if (existing.assignment_id !== assignmentId || existing.question_number !== questionNumber || existing.answer !== input.answer) fail(409, '这次订正已记录，请开始新一次订正');
       attemptNumber = existing.attempt_number;
     } else {
       attemptNumber = db.prepare('SELECT COUNT(*) AS n FROM correction_attempts WHERE student_id=? AND assignment_id=? AND question_number=?').get(studentId, assignmentId, questionNumber).n + 1;
-      db.prepare(`INSERT INTO correction_attempts(student_id,assignment_id,question_number,attempt_number,request_id,answer,correct,submitted_at)
+      db.prepare(`INSERT INTO correction_attempts(student_id,assignment_id,question_number,attempt_number,request_key,answer,correct,created_at)
         VALUES(?,?,?,?,?,?,?,?)`).run(studentId, assignmentId, questionNumber, attemptNumber, input.requestId, input.answer, Number(input.answer === explanation.correctAnswer), new Date(now).toISOString());
       created = true;
     }

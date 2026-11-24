@@ -4,7 +4,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createApp } from '../backend/app.mjs';
-import { publishAssignment } from '../backend/store.mjs';
+import { publishAssignment, solution } from '../backend/store.mjs';
 import { seedAnalytics } from './analytics-fixture.mjs';
 import { createHistoryClass, teacherPassword, snapshot } from './history-fixture.mjs';
 
@@ -77,6 +77,26 @@ test('学情按北京时间发布日期包含起止日，默认最近七日；�
     }
     assert.equal((await request('/analytics',teacher)).status,400);
     assert.equal((await request(`/analytics?classId=1&from=2026-12-01&assignmentId=${a}&questionNumber=1`,teacher)).status,404);
+  });
+});
+
+test('20题综合卷与50题括号卷按实际题量统计，第50题订正不影响首次答案',async()=>{
+  await withAnalytics(async({db,request,login})=>{
+    seedAnalytics(db);const teacher=await login(), pupil=await login('lin'), papers=[];
+    for(const options of [{category:'composite',selectedCategories:['add-sub-20','mul-div-20','mixed-100'],questionCount:20},{category:'mixed-100',questionCount:50,grade:3,knowledgePoints:['parentheses'],difficulty:'advanced'}]){
+      const id=publishAssignment(db,`${options.questionCount}题卷`,{...options,classIds:[1]});
+      db.prepare('UPDATE assignments SET created_at=? WHERE id=?').run('2026-12-03T00:00:00Z',id);
+      const questions=JSON.parse(db.prepare('SELECT questions FROM assignments WHERE id=?').get(id).questions),answers=questions.map(solution);
+      answers[answers.length-1]=answers.at(-1)===0?1:0;
+      const submission=await request(`/assignments/${id}/submit`,pupil,{answers});assert.equal(submission.status,200);assert.equal(submission.body.score,options.questionCount===20?95:98);
+      papers.push({id,questions,answers});
+    }
+    const query='/analytics?classId=1&from=2026-12-03&to=2026-12-03', original=(await request(query,teacher)).body;
+    assert.equal(original.questions.length,70);assert.equal(original.summary.average,96.5);
+    const {id,questions}=papers[1], detail=(await request(`${query}&assignmentId=${id}&questionNumber=50`,teacher)).body.selectedQuestion;
+    assert.deepEqual([detail.correctCount,detail.wrongCount,detail.missingCount,detail.unsubmittedCount],[0,1,0,3]);assert.equal(detail.correctAnswer,solution(questions[49]));
+    assert.equal((await request(`/mistakes/${id}/50/attempts`,pupil,{answer:detail.correctAnswer,requestId:'analytics-question-50'})).status,201);
+    assert.deepEqual((await request(query,teacher)).body,original);
   });
 });
 

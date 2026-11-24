@@ -1,7 +1,7 @@
 const root = document.querySelector('#app');
 const notice = document.querySelector('#notice');
 const dialog = document.querySelector('#submit-dialog');
-const state = { user: null, assignments: [], students: [], classes: [], classId: null, importResult: null, practiceOptions: null, assignment: null, dirty: false, busy: false, route: '', loading: false, loadError: '' };
+const state = { user: null, assignments: [], students: [], classes: [], classId: null, importResult: null, studentQuery: '', practiceOptions: null, assignment: null, dirty: false, busy: false, route: '', loading: false, loadError: '' };
 let loadEpoch = 0;
 let toastTimer;
 const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
@@ -41,7 +41,7 @@ async function api(path, method = 'GET', data) {
   for (const a of Array.isArray(result) ? result : [result]) if (a.serverNow) a.receivedAt = performance.now();
   if (!response.ok) {
     if (response.status === 401 && state.user) {
-      loadEpoch++; state.user = null; state.dirty = false; state.assignment = null; state.assignments = []; state.students = []; state.importResult = null; render();
+      loadEpoch++; state.user = null; state.dirty = false; state.assignment = null; state.assignments = []; state.students = []; state.importResult = null; state.studentQuery = ''; render();
     }
     throw Object.assign(new Error(result.error || '操作失败，请重试'), { status: response.status });
   }
@@ -100,8 +100,22 @@ function studentsView() {
   const currentClass = state.classes.find(c => c.id === state.classId);
   return `${classPicker()}${pageTitle('班级管理', '把同学们加进来', '创建账号并选择对应班级，将账号密码告知学生。')}
     <div class="class-management panel"><form id="class-form"><label>新班级名称<input name="className" required maxlength="30" placeholder="例如：二班"></label><button class="button" type="submit">创建班级</button></form><form id="rename-class-form"><label>当前班级名称<input name="renameClassName" required maxlength="30" value="${esc(currentClass.name)}"></label><button class="button secondary" type="submit">修改名称</button></form><p id="class-error" class="form-error" role="alert"></p></div>
-    ${importPanel()}<p class="small muted">调整班级会改变新作业的可见范围和按当前名单的统计，已存成绩不删除；升级前的历史作业仍可续做和回看。</p><div class="teacher-layout"><section class="panel"><div class="section-heading"><h2>${esc(currentClass.name)} · 学生名单</h2><span class="badge">${state.students.length} 人</span></div>${state.students.length ? `<div class="table-wrap"><table><thead><tr><th scope="col">姓名</th><th scope="col">登录账号</th><th scope="col">所在班级</th></tr></thead><tbody>${state.students.map(s => `<tr><td><span class="avatar">${esc(s.name.slice(0, 1))}</span>${esc(s.name)}</td><td class="mono">${esc(s.username)}</td><td><select data-student-class="${s.id}" aria-label="${esc(s.name)}的班级">${classOptions(s.classId)}</select></td></tr>`).join('')}</tbody></table></div>` : '<div class="empty"><h3>本班还没有学生</h3><p>创建学生账号，或切换班级调整已有学生的归属。</p></div>'}</section>
+    ${importPanel()}<p class="small muted">调整班级会改变新作业的可见范围和按当前名单的统计，已存成绩不删除；升级前的历史作业仍可续做和回看。</p><div class="teacher-layout"><section class="panel"><div class="section-heading"><h2>${esc(currentClass.name)} · 学生名单</h2><span id="student-count" class="badge" aria-live="polite">${matchingStudents().length} / ${state.students.length} 人</span></div><div class="roster-search"><label>按姓名或学号搜索<input name="studentSearch" type="search" maxlength="64" autocomplete="off" placeholder="例如：张宁 或 00123" value="${esc(state.studentQuery)}" aria-controls="student-list"></label><button type="button" class="button secondary" data-action="clear-search">清空搜索</button></div><div id="student-list">${studentsTable(matchingStudents())}</div></section>
     <aside class="panel"><span class="eyebrow">加入班级</span><h2>创建学生账号</h2><form id="student-form"><label>学生姓名<input name="name" required maxlength="30" autocomplete="off" placeholder="例如：小雨"></label><label>所在班级<select name="classId">${classOptions()}</select></label><label>登录账号<input name="username" required minlength="3" maxlength="32" pattern="[a-zA-Z0-9_-]+" autocomplete="off" placeholder="例如：student03"><small>3–32 位字母、数字、下划线或短横线</small></label><label>初始密码<input name="password" type="password" required minlength="8" maxlength="128" autocomplete="new-password" placeholder="至少 8 个字符"><small>请自行记录并告知学生。</small></label><p class="form-error" id="student-error" role="alert"></p><button type="submit" class="button full">创建学生账号</button></form></aside></div>`;
+}
+function matchingStudents() {
+  const query = state.studentQuery.trim().toLowerCase();
+  return state.students.filter(s => s.name.toLowerCase().includes(query) || s.username.toLowerCase().includes(query));
+}
+function studentsTable(students) {
+  return students.length ? `<div class="table-wrap"><table><thead><tr><th scope="col">姓名</th><th scope="col">学号 / 登录账号</th><th scope="col">所在班级</th></tr></thead><tbody>${students.map(s => `<tr><td><span class="avatar">${esc(s.name.slice(0, 1))}</span>${esc(s.name)}</td><td class="mono">${esc(s.username)}</td><td><select data-student-class="${s.id}" aria-label="${esc(s.name)}（${esc(s.username)}）的班级">${classOptions(s.classId)}</select></td></tr>`).join('')}</tbody></table></div>` : state.students.length ? '<div class="empty"><h3>没有找到匹配的学生</h3><p>可更换姓名或学号，或清空搜索查看整班名单。</p></div>' : '<div class="empty"><h3>本班还没有学生</h3><p>导入名单、创建账号，或切换班级调整已有学生的归属。</p></div>';
+}
+function updateStudentSearch() {
+  const list = document.querySelector('#student-list');
+  if (!list) return;
+  const students = matchingStudents();
+  list.innerHTML = studentsTable(students);
+  document.querySelector('#student-count').textContent = `${students.length} / ${state.students.length} 人`;
 }
 function importPanel() {
   const result = state.importResult;
@@ -194,7 +208,7 @@ root.addEventListener('submit', async event => {
   event.preventDefault();
   const form = event.target;
   if (form.id === 'login-form') await formAction(form, 'login-error', async data => {
-    state.user = await api('/login', 'POST', data); state.dirty = false; state.assignments = []; state.students = []; state.importResult = null; state.assignment = null;
+    state.user = await api('/login', 'POST', data); state.dirty = false; state.assignments = []; state.students = []; state.importResult = null; state.studentQuery = ''; state.assignment = null;
     history.replaceState(null, '', '#/'); await load();
   });
   if (form.id === 'publish-form') await formAction(form, 'publish-error', async data => {
@@ -214,6 +228,7 @@ root.addEventListener('submit', async event => {
     if (!file.size || file.size > 512 * 1024) throw new Error('名单文件不能为空，且不能超过 512 KB');
     const classId = state.classId;
     state.importResult = await api('/students/import', 'POST', { classId, format, content: await fileBase64(file) });
+    state.studentQuery = '';
     await load();
   });
   if (form.id === 'class-form') await formAction(form, 'class-error', async data => {
@@ -250,6 +265,7 @@ async function saveAnswers(submit = false) {
   finally { state.busy = false; fieldset.disabled = false; form.querySelectorAll('button').forEach(b => { b.disabled = false; }); syncDeadlineUI(); }
 }
 root.addEventListener('input', event => {
+  if (event.target.name === 'studentSearch') { state.studentQuery = event.target.value; updateStudentSearch(); }
   if (event.target.name === 'category' || event.target.name === 'grade') syncPracticeFields();
   if (event.target.closest('#answer-form')) {
     state.dirty = true;
@@ -275,6 +291,9 @@ root.addEventListener('click', async event => {
   const action = event.target.closest('[data-action]')?.dataset.action;
   if (state.busy && (event.target.closest('a') || action)) { event.preventDefault(); return; }
   if (action === 'save') await saveAnswers();
+  if (action === 'clear-search') {
+    state.studentQuery = ''; document.querySelector('[name="studentSearch"]').value = ''; updateStudentSearch();
+  }
   if (action === 'start') {
     state.busy = true;
     try { state.assignment = await api(`/assignments/${state.assignment.id}/start`, 'POST', {}); render(); }
@@ -285,7 +304,7 @@ root.addEventListener('click', async event => {
   if (action === 'logout') {
     if (state.dirty && !confirm('还有未保存的答案。确定退出并放弃这些修改吗？')) return;
     state.busy = true;
-    try { await api('/logout', 'POST', {}); loadEpoch++; state.user = null; state.assignment = null; state.assignments = []; state.students = []; state.importResult = null; state.dirty = false; history.replaceState(null, '', '#/'); render(); }
+    try { await api('/logout', 'POST', {}); loadEpoch++; state.user = null; state.assignment = null; state.assignments = []; state.students = []; state.importResult = null; state.studentQuery = ''; state.dirty = false; history.replaceState(null, '', '#/'); render(); }
     catch (e) { toast(e.message, true); }
     finally { state.busy = false; }
   }

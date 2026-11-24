@@ -29,7 +29,7 @@ export function storedPreview(db, teacherId) {
 }
 export function writePreview(db, teacherId, previewId, settings, paper, createdAt) {
   const c = columns(db), names = new Set(c.fields.map(f => f.name));
-  const config = JSON.stringify({ ...settings, questionCategories: paper.questionCategories });
+  const config = JSON.stringify({ ...settings, questionCategories: paper.questionCategories, generationVersion: 1 });
   const values = { [c.teacher]: teacherId, [c.id]: previewId, [c.config]: config, [c.questions]: JSON.stringify(paper.questions), [c.created]: createdAt, [c.published]: null };
   const compatible = { title: settings.title, category: settings.category, difficulty: settings.difficulty, question_count: settings.questionCount,
     mixed_grade: settings.grade, knowledge_points: settings.knowledgePoints.length ? JSON.stringify(settings.knowledgePoints) : null,

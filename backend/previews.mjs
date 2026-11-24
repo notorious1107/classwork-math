@@ -16,7 +16,7 @@ export function readPreview(db, teacherId) {
     dueAt: raw.dueAt ?? row.due_at ?? null, timeLimitMinutes: raw.timeLimitMinutes ?? row.time_limit_minutes ?? null };
   const questionCategories = raw.questionCategories ?? parse(row.question_categories) ?? questions.map(q => settings.category === 'composite' ? inferCategory([q]) : settings.category);
   const components = settings.selectedCategories.map(category => ({ category, count: questionCategories.filter(c => c === category).length }));
-  return { previewId: stored.previewId, createdAt: stored.createdAt, publishedAssignmentId: stored.publishedAssignmentId, settings,
+  return { previewId: stored.previewId, createdAt: stored.createdAt, publishedAssignmentId: stored.publishedAssignmentId, usesCurrentRules: raw.generationVersion === 1, settings,
     questions, questionCategories, components, expressions: questions.map(q => formatExpression(q)) };
 }
 export function createPreview(db, teacherId, settings, now) {

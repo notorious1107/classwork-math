@@ -3,11 +3,11 @@ import assert from 'node:assert/strict';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { DatabaseSync } from 'node:sqlite';
+import { legacyPreviewClass, legacyPreviewSchemas } from './preview-fixture.mjs';
 import { createApp } from '../backend/app.mjs';
 import { generatePaper, paperOptions, practiceCategories } from '../backend/papers.mjs';
 import { solution, formatExpression } from '../backend/store.mjs';
-import { createHistoryClass, historyAssignments, teacherPassword, snapshot } from './history-fixture.mjs';
+import { teacherPassword, snapshot } from './history-fixture.mjs';
 
 async function fixture(run, seed) {
   const dir = await mkdtemp(join(tmpdir(), 'classwork-preview-')), dbPath = join(dir, 'test.sqlite');
@@ -68,6 +68,7 @@ test('预览换卷不对学生可见，最终原样发布、并发重试幂等�
     assert.equal(db().prepare('SELECT COUNT(*) AS n FROM assignments').get().n, 0);
     assert.deepEqual((await request('/assignments', lin)).body, []); assert.deepEqual((await request('/assignments', zhou)).body, []);
     const final = (await request('/assignment-previews', teacher, 'POST', config)).body;
+    assert.equal(final.usesCurrentRules, true);
     assert.notEqual(final.previewId, first.body.previewId); assert.notDeepEqual(final.questions, first.body.questions);
     assert.equal((await request(`/assignment-previews/${first.body.previewId}/publish`, teacher, 'POST', {})).status, 409);
     const other = (await request('/assignment-previews', secondTeacher, 'POST', { title: '其他老师的预览' })).body;
@@ -100,28 +101,13 @@ test('预览换卷不对学生可见，最终原样发布、并发重试幂等�
   });
 });
 
-export const legacyPreviewSchemas = [
-  "teacher_id INTEGER PRIMARY KEY, preview_id TEXT NOT NULL, questions TEXT NOT NULL, published_assignment_id INTEGER",
-  "id TEXT PRIMARY KEY, teacher_id INTEGER NOT NULL UNIQUE, payload TEXT NOT NULL, questions TEXT NOT NULL, created_at TEXT NOT NULL, published_assignment_id INTEGER",
-  "id INTEGER PRIMARY KEY, teacher_id INTEGER NOT NULL UNIQUE, preview_token TEXT NOT NULL, settings_json TEXT NOT NULL, questions_json TEXT NOT NULL, generated_at TEXT NOT NULL, assignment_id INTEGER"
-];
-async function legacyPreviewClass(path, schema) {
-  await createHistoryClass(path); const db = new DatabaseSync(path);
-  try {
-    db.exec(`CREATE TABLE assignment_previews(${schema})`);
-    db.prepare("INSERT INTO users(id,username,name,password_hash,role) SELECT 9,'teacher2','第二位老师',password_hash,'teacher' FROM users WHERE username='teacher'").run();
-    const settings = JSON.stringify({ title: '旧预览', category: 'mixed-100', difficulty: 'advanced', grade: 3, knowledgePoints: ['parentheses'], questionCount: 10, classIds: [1] });
-    const values = teacherId => { const id = `legacy-preview-${teacherId}`, questions = JSON.stringify(historyAssignments[2].questions), stamp = '2026-10-01T04:00:00Z', published = teacherId === 9 ? 22 : null; return schema === legacyPreviewSchemas[0] ? [teacherId, id, questions, published] : schema === legacyPreviewSchemas[1] ? [id, teacherId, settings, questions, stamp, published] : [teacherId, teacherId, id, settings, questions, stamp, published]; };
-    const insert = db.prepare(`INSERT INTO assignment_previews VALUES(${values(1).map(() => '?').join(',')})`); insert.run(...values(1)); insert.run(...values(9));
-  } finally { db.close(); }
-}
 test('接续每位老师一行的旧预览表，保留已有发布关联和旧原题草稿成绩', async t => {
   for (const [index, schema] of legacyPreviewSchemas.entries()) await t.test(`旧表形态 ${index + 1}`, async () => {
     await fixture(async ({ db, request, login, restart }) => {
       const originals = snapshot(db()), oldQuestions = db().prepare('SELECT questions FROM assignments WHERE id=33').get().questions;
       const teacher = await login('teacher', teacherPassword), teacher2 = await login('teacher2', teacherPassword);
       const old = (await request('/assignment-previews/current', teacher)).body.preview;
-      assert.equal(old.previewId, 'legacy-preview-1'); assert.deepEqual(old.questions, JSON.parse(oldQuestions));
+      assert.equal(old.previewId, 'legacy-preview-1'); assert.equal(old.usesCurrentRules, false); assert.deepEqual(old.questions, JSON.parse(oldQuestions));
       const oldPublished = await request('/assignment-previews/legacy-preview-9/publish', teacher2, 'POST', {});
       assert.equal(oldPublished.status, 200); assert.equal(oldPublished.body.id, 22);
       const continued = await request(`/assignment-previews/${old.previewId}/publish`, teacher, 'POST', {});

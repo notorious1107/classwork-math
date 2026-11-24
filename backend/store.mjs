@@ -134,6 +134,12 @@ export async function openStore(path, teacherPassword = 'Teacher123!') {
     assignment_id INTEGER NOT NULL REFERENCES assignments(id), student_id INTEGER NOT NULL REFERENCES users(id),
     started_at TEXT NOT NULL, PRIMARY KEY(assignment_id,student_id)
   )`);
+  db.exec(`CREATE TABLE IF NOT EXISTS correction_attempts (
+    id INTEGER PRIMARY KEY, student_id INTEGER NOT NULL REFERENCES users(id), assignment_id INTEGER NOT NULL REFERENCES assignments(id),
+    question_number INTEGER NOT NULL CHECK(question_number>=1), attempt_number INTEGER NOT NULL CHECK(attempt_number>=1),
+    request_id TEXT NOT NULL, answer INTEGER NOT NULL CHECK(answer>=0), correct INTEGER NOT NULL CHECK(correct IN (0,1)), submitted_at TEXT NOT NULL,
+    UNIQUE(student_id,assignment_id,question_number,attempt_number), UNIQUE(student_id,request_id)
+  )`);
   db.exec('BEGIN IMMEDIATE');
   try {
     const migratingClass = !db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='assignment_classes'").get();

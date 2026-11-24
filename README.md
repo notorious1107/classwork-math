@@ -115,3 +115,5 @@ node --experimental-sqlite --test --test-name-pattern=INC-001 tests/api.test.mjs
 学生导入的验证见 tests/roster.test.mjs：CSV 物理行号、引号/BOM、Excel 文本学号与前导零、逐行错误、同名学生、跨班冲突、并发导入、重启登录、权限和文件大小；页面测试经真实前端代理上传 CSV 和 Excel，核对错误行、下载样例、断网重试及前导零账号登录。
 
 本轮另在内置 Chromium 中实际上传 Excel 样例，核对 00123/00124 同名学生、按学号搜索、换班与清空；上传包含空学号、重复和跨班已有账号的 CSV，逐行确认跳过原因，原账号仍用 00123 登录。375 像素视口下页面无横向溢出。新增搜索页面测试也验证待上传文件不因输入筛选而丢失，导入后恢复完整名单。
+
+教师月历接口为 GET /api/calendar?classId=1&month=2026-11，要求教师登录并选班。month 留空时使用服务端北京时间的当前月，返回逐日练习摘要；按 created_at（发布日期）的北京时间归类，dueAt（截止时间）单独保留，统计复用该班成绩报告。tests/calendar.test.mjs 覆盖午夜、月界、跨年、闰日、无人提交、分班统计、权限及读取不改原数据。

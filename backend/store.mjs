@@ -45,13 +45,19 @@ export function generateQuestions(category = 'add-sub-20', questionCount = 10, o
   return questions;
 }
 
-export function publishAssignment(db, title, { category = 'add-sub-20', questionCount = 10, dueAt = null, timeLimitMinutes = null, ...input } = {}) {
+export function publishAssignment(db, title, { category = 'add-sub-20', questionCount = 10, dueAt = null, timeLimitMinutes = null, classIds = [1], ...input } = {}) {
   const options = category === 'mixed-100' ? mixedOptions(input) : null;
-  const result = db.prepare(`INSERT INTO assignments(title,questions,created_at,category,due_at,time_limit_minutes,question_count,difficulty,mixed_grade,knowledge_points)
+  const questions = JSON.stringify(generateQuestions(category, questionCount, options));
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    const result = db.prepare(`INSERT INTO assignments(title,questions,created_at,category,due_at,time_limit_minutes,question_count,difficulty,mixed_grade,knowledge_points)
     VALUES(?,?,?,?,?,?,?,?,?,?)`)
-    .run(title, JSON.stringify(generateQuestions(category, questionCount, options)), new Date().toISOString(), category, dueAt, timeLimitMinutes,
+    .run(title, questions, new Date().toISOString(), category, dueAt, timeLimitMinutes,
       questionCount, options?.difficulty ?? null, options?.grade ?? null, options ? JSON.stringify(options.knowledgePoints) : null);
-  return Number(result.lastInsertRowid);
+    const id = Number(result.lastInsertRowid);
+    for (const classId of classIds) db.prepare('INSERT INTO assignment_classes(assignment_id,class_id) VALUES(?,?)').run(id, classId);
+    db.exec('COMMIT'); return id;
+  } catch (e) { db.exec('ROLLBACK'); throw e; }
 }
 
 const operators = {
@@ -128,6 +134,23 @@ export async function openStore(path, teacherPassword = 'Teacher123!') {
     assignment_id INTEGER NOT NULL REFERENCES assignments(id), student_id INTEGER NOT NULL REFERENCES users(id),
     started_at TEXT NOT NULL, PRIMARY KEY(assignment_id,student_id)
   )`);
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    const migratingClass = !db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='assignment_classes'").get();
+    db.exec(`CREATE TABLE IF NOT EXISTS classes(id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE);
+      INSERT OR IGNORE INTO classes(id,name) VALUES(1,'原班级');`);
+    if (!db.prepare("SELECT 1 FROM pragma_table_info('users') WHERE name='class_id'").get()) db.exec('ALTER TABLE users ADD COLUMN class_id INTEGER REFERENCES classes(id)');
+    db.exec(`UPDATE users SET class_id=1 WHERE role='student' AND class_id IS NULL;
+      CREATE TABLE IF NOT EXISTS assignment_classes(
+        assignment_id INTEGER NOT NULL REFERENCES assignments(id), class_id INTEGER NOT NULL REFERENCES classes(id), PRIMARY KEY(assignment_id,class_id)
+      );
+      CREATE TABLE IF NOT EXISTS legacy_assignment_students(
+        assignment_id INTEGER NOT NULL REFERENCES assignments(id), student_id INTEGER NOT NULL REFERENCES users(id), PRIMARY KEY(assignment_id,student_id)
+      );`);
+    if (migratingClass) db.exec(`INSERT INTO assignment_classes SELECT id,1 FROM assignments;
+      INSERT INTO legacy_assignment_students SELECT a.id,u.id FROM assignments a CROSS JOIN users u WHERE u.role='student';`);
+    db.exec('COMMIT');
+  } catch (e) { db.exec('ROLLBACK'); throw e; }
   if (!db.prepare("SELECT id FROM users WHERE role='teacher'").get()) {
     db.prepare('INSERT INTO users(username,name,password_hash,role) VALUES(?,?,?,?)')
       .run('teacher', '数学老师', await hashPassword(teacherPassword), 'teacher');

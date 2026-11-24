@@ -29,7 +29,7 @@ export const studentPassword = 'FixtureStudent42';
 
 export function snapshot(db) {
   return {
-    users: db.prepare('SELECT * FROM users ORDER BY id').all(),
+    users: db.prepare('SELECT * FROM users ORDER BY id').all().map(u => { u.class_id ??= u.role === 'student' ? 1 : null; return u; }),
     assignments: db.prepare('SELECT * FROM assignments ORDER BY id').all().map(a => {
       for (const name of ['time_limit_minutes', 'question_count', 'difficulty', 'mixed_grade', 'knowledge_points']) a[name] ??= null;
       return a;

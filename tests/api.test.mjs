@@ -437,6 +437,18 @@ test('INC-001 已有班级在合成迁移库副本上继续使用', async t => {
       assert.deepEqual(after.assignments.slice(0, 3), before.assignments);
       assert.deepEqual(after.submissions.filter(s => s.student_id !== 4), before.submissions.filter(s => s.submitted_at));
     });
+    await t.test('旧班分班后原账号仍能回看历史成绩，旧题与原难度字段保持', async () => {
+      const assignmentsBefore = snapshot(db).assignments;
+      const second = await request('/api/classes', { method: 'POST', cookie: teacher, data: { name: '二班' } });
+      assert.equal(second.status, 201);
+      assert.equal((await request('/api/students/4', { method: 'PUT', cookie: teacher, data: { classId: second.body.id } })).status, 200);
+      const restored = (await request('/api/assignments/33', { cookie: students[2] })).body;
+      assert.equal(restored.score, 90); assert.equal(restored.difficulty, null); assert.deepEqual(restored.questions, historyAssignments[2].questions);
+      assert.equal((await request('/api/assignments/22', { cookie: students[2] })).body.difficulty, 'advanced');
+      const report = (await request('/api/assignments/33/report?classId=1', { cookie: teacher })).body;
+      assert.equal(report.total, 3); assert.deepEqual(report.students.map(s => s.score), [80, 70, 90]);
+      assert.deepEqual(snapshot(db).assignments, assignmentsBefore);
+    });
   } finally {
     server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); db.close();
   }

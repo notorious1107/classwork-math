@@ -117,3 +117,52 @@ test('混合题配置经API校验并持久保存，年级知识点与难度可�
     assert.deepEqual(restored, a);
   });
 });
+
+test('多班作业权限、同卷发布、分班统计与重启隔离', async () => {
+  await fixture(async ({ request, teacher, student, restart }) => {
+    assert.equal((await request('/classes/1', teacher, 'PUT', { name: '一班' })).status, 200);
+    const second = (await request('/classes', teacher, 'POST', { name: '二班' })).body;
+    const third = (await request('/classes', teacher, 'POST', { name: '三班' })).body;
+    assert.equal((await request('/classes', teacher, 'POST', { name: '二班' })).status, 409);
+    assert.equal((await request('/classes/1', teacher, 'PUT', { name: '二班' })).status, 409);
+    const lin = await student('lin', 1), pending1 = await student('pending1', 1);
+    const zhou = await student('zhou', second.id), pending2 = await student('pending2', second.id), outsider = await student('outside', third.id);
+    for (const path of ['/classes', '/students']) assert.equal((await request(path, zhou.cookie)).status, 403);
+    assert.equal((await request(`/students/${lin.id}`, zhou.cookie, 'PUT', { classId: second.id })).status, 403);
+    assert.equal((await request('/classes', zhou.cookie, 'POST', { name: '越权' })).status, 403);
+    for (const classIds of [[], [1, 1], ['1'], [999], null]) assert.equal((await request('/assignments', teacher, 'POST', { title: '错误班级', classIds })).status, 400);
+    const solo = (await request('/assignments', teacher, 'POST', { title: '只给一班', classIds: [1] })).body;
+    assert.deepEqual((await request('/assignments', zhou.cookie)).body, []);
+    for (const [suffix, method, data] of [['?classId=1', 'GET', undefined], ['/start', 'POST', {}], ['/draft', 'PUT', { answers: solo.questions.map(solution) }], ['/submit', 'POST', { answers: solo.questions.map(solution) }]]) {
+      assert.equal((await request(`/assignments/${solo.id}${suffix}`, zhou.cookie, method, data)).status, 404);
+    }
+    const published = await request('/assignments', teacher, 'POST', { title: '两班同卷限时提高题', classIds: [1, second.id], category: 'mixed-100', questionCount: 20,
+      grade: 3, knowledgePoints: ['parentheses'], difficulty: 'advanced', timeLimitMinutes: 20 });
+    assert.equal(published.status, 201); const both = published.body, path = `/assignments/${both.id}`;
+    const linView = (await request(path + '/start', lin.cookie, 'POST', {})).body;
+    const zhouView = (await request(path + '/start', zhou.cookie, 'POST', {})).body;
+    assert.deepEqual(linView.questions, zhouView.questions); assert.deepEqual(linView.expressions, zhouView.expressions);
+    assert.equal((await request(path, outsider.cookie)).status, 404);
+    const answers = both.questions.map(solution), wrong = (n) => answers.map((v, i) => i < n ? (v + 1) % 101 : v);
+    assert.equal((await request(path + '/submit', lin.cookie, 'POST', { answers: wrong(1) })).body.score, 95);
+    assert.equal((await request(path + '/submit', zhou.cookie, 'POST', { answers: wrong(2) })).body.score, 90);
+    for (const [classId, score, names] of [[1, 95, ['lin', 'pending1']], [second.id, 90, ['zhou', 'pending2']]]) {
+      const report = (await request(`${path}/report?classId=${classId}`, teacher)).body;
+      assert.equal(report.total, 2); assert.equal(report.submitted, 1); assert.equal(report.pending, 1); assert.equal(report.average, score);
+      assert.deepEqual(report.students.map(s => s.username), names);
+      assert.equal((await request(`/students?classId=${classId}`, teacher)).body.length, 2);
+    }
+    assert.equal((await request(path + '/report', teacher)).body.average, 92.5);
+    assert.equal((await request(`${path}/report?classId=${third.id}`, teacher)).status, 404);
+    await restart();
+    assert.deepEqual((await request(path, teacher)).body.classIds, [1, second.id]);
+    assert.equal((await request(`/assignments/${solo.id}`, zhou.cookie)).status, 404);
+    assert.equal((await request(`${path}/report?classId=${second.id}`, teacher)).body.average, 90);
+    // A new student's class is the source of visibility; a query parameter cannot select another class.
+    const newcomer = await student('newcomer', second.id);
+    assert.deepEqual((await request('/assignments?classId=1', newcomer.cookie)).body.map(a => a.id), [both.id]);
+    assert.equal((await request(`/students/${pending1.id}`, teacher, 'PUT', { classId: second.id })).status, 200);
+    assert.equal((await request(`/assignments/${solo.id}`, pending1.cookie)).status, 404);
+    assert.equal((await request(`/students/${pending2.id}`, teacher, 'PUT', { classId: 999 })).status, 400);
+  });
+});

@@ -1,7 +1,7 @@
 const root = document.querySelector('#app');
 const notice = document.querySelector('#notice');
 const dialog = document.querySelector('#submit-dialog');
-const state = { user: null, assignments: [], students: [], practiceOptions: null, assignment: null, dirty: false, busy: false, route: '', loading: false, loadError: '' };
+const state = { user: null, assignments: [], students: [], classes: [], classId: null, practiceOptions: null, assignment: null, dirty: false, busy: false, route: '', loading: false, loadError: '' };
 let loadEpoch = 0;
 let toastTimer;
 const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
@@ -18,6 +18,8 @@ function syncDeadlineUI() {
     timer.textContent = `剩余 ${Math.floor(seconds / 60)} 分 ${String(seconds % 60).padStart(2, '0')} 秒`;
   }
   if (state.user?.role !== 'student' || !a || a.submittedAt || !closed(a)) return;
+  const start = document.querySelector('[data-action="start"]');
+  if (start) { start.disabled = true; start.textContent = '已截止，不能开始'; }
   const message = document.querySelector('#deadline-state');
   if (message) { message.hidden = false; message.textContent = closedMessage; }
   const button = document.querySelector('[data-submit]');
@@ -61,6 +63,9 @@ function loginView() {
 function pageTitle(eyebrow, title, detail, extra = '') {
   return `<div class="page-title"><div><span class="eyebrow">${eyebrow}</span><h1>${title}</h1><p class="muted">${detail}</p></div>${extra}</div>`;
 }
+const classOptions = (selected = state.classId, classes = state.classes) => classes.map(c => `<option value="${c.id}" ${c.id === selected ? 'selected' : ''}>${esc(c.name)}</option>`).join('');
+const classPicker = (classes = state.classes) => `<label class="class-picker">当前班级<select name="currentClass">${classOptions(state.classId, classes)}</select></label>`;
+const targetFields = () => `<fieldset class="target-fields"><legend>发布给哪些班级</legend>${state.classes.map(c => `<label><input type="checkbox" name="classIds" value="${c.id}" ${c.id === state.classId ? 'checked' : ''}>${esc(c.name)}</label>`).join('')}</fieldset>`;
 const categoryNames = {
   'add-sub-20': '20 以内加减', 'mul-div-20': '20 以内乘除', 'mixed-100': '100 以内混合运算'
 };
@@ -86,18 +91,20 @@ function syncPracticeFields() {
   if (!fields.querySelector('input:checked:not(:disabled)')) fields.querySelector('input:not(:disabled)').checked = true;
 }
 function teacherHome() {
-  return `${pageTitle('教师工作台', '每一份练习，都看得见', `全班 ${state.students.length} 名学生 · 已发布 ${state.assignments.length} 份作业`, '<button class="button secondary" data-action="refresh">刷新成绩 ↻</button>')}
+  return `${classPicker()}${pageTitle('教师工作台', '每一份练习，都看得见', `${esc(state.classes.find(c => c.id === state.classId)?.name)} · ${state.students.length} 名学生 · 已发布 ${state.assignments.length} 份作业`, '<button class="button secondary" data-action="refresh">刷新成绩 ↻</button>')}
     <div class="teacher-layout"><section><div class="section-heading"><h2>班级作业</h2><span class="muted">最新发布在前</span></div>
     ${state.assignments.length ? `<div class="assignment-list">${state.assignments.map(a => `<a class="assignment-card" href="#/assignment/${a.id}"><div class="card-top"><span class="eyebrow">${assignmentSummary(a)}</span><span class="arrow">↗</span></div><h3>${esc(a.title)}</h3><p class="muted">发布于 ${date(a.createdAt)}<br>${deadline(a)}</p><div class="card-stats"><div><strong>${a.submitted}<small> / ${a.total}</small></strong><span>已交人数</span></div><div><strong>${a.pending}</strong><span>未交人数</span></div><div><strong>${a.average ?? '—'}</strong><span>平均分</span></div></div></a>`).join('')}</div>` : '<div class="empty"><span class="empty-symbol">＋ −</span><h3>从第一份练习开始</h3><p>选择题型和题量，发布全班的计算练习。</p></div>'}</section>
-    <aside class="panel publish-panel"><span class="eyebrow">一份小练习</span><h2>发布新作业</h2><p class="muted">每次选择一种题型，全班完成同一套题，满分 100 分。</p><form id="publish-form"><label>作业名称<input name="title" required maxlength="60" placeholder="例如：周三计算小练习"></label><label>练习题型<select name="category">${Object.entries(categoryNames).map(([value, label]) => `<option value="${value}">${label}</option>`).join('')}</select></label>${practiceFields()}<label>题目数量<select name="questionCount">${[10, 20, 50].map(n => `<option value="${n}">${n} 道</option>`).join('')}</select></label><label>每人作答时间（分钟，可选）<input type="number" name="timeLimitMinutes" min="1" max="1440" step="1" placeholder="例如：20"><small>留空则不限制个人时长，点击开始后连续计时。</small></label><label>截止时间（北京时间，可选）<input type="datetime-local" name="dueAt" step="60"><small>留空则不限时；到点停止提交，仍可保存草稿。</small></label><div class="paper-spec"><span>总分<strong>100 分，按答对比例计分</strong></span><span>面向学生<strong>全班学生</strong></span></div><p class="form-error" id="publish-error" role="alert"></p><button type="submit" class="button full">发布作业 ＋</button></form><p class="small muted">发布后学生即可开始作答。新加入的学生也能看到历史作业。</p></aside></div>`;
+    <aside class="panel publish-panel"><span class="eyebrow">一份小练习</span><h2>发布新作业</h2><p class="muted">选择题型和接收班级，所选班级完成同一套题，满分 100 分。</p><form id="publish-form"><label>作业名称<input name="title" required maxlength="60" placeholder="例如：周三计算小练习"></label><label>练习题型<select name="category">${Object.entries(categoryNames).map(([value, label]) => `<option value="${value}">${label}</option>`).join('')}</select></label>${practiceFields()}${targetFields()}<label>题目数量<select name="questionCount">${[10, 20, 50].map(n => `<option value="${n}">${n} 道</option>`).join('')}</select></label><label>每人作答时间（分钟，可选）<input type="number" name="timeLimitMinutes" min="1" max="1440" step="1" placeholder="例如：20"><small>留空则不限制个人时长，点击开始后连续计时。</small></label><label>截止时间（北京时间，可选）<input type="datetime-local" name="dueAt" step="60"><small>留空则不限时；到点停止提交，仍可保存草稿。</small></label><div class="paper-spec"><span>总分<strong>100 分，按答对比例计分</strong></span><span>面向学生<strong>所选班级学生</strong></span></div><p class="form-error" id="publish-error" role="alert"></p><button type="submit" class="button full">发布作业 ＋</button></form><p class="small muted">发布后，所选班级学生可以开始作答；其他班级看不到这份新作业。</p></aside></div>`;
 }
 function studentsView() {
-  return `${pageTitle('班级管理', '把同学们加进来', '创建账号后，将账号和密码告知对应学生。')}
-    <div class="teacher-layout"><section class="panel"><div class="section-heading"><h2>学生名单</h2><span class="badge">${state.students.length} 人</span></div>${state.students.length ? `<div class="table-wrap"><table><thead><tr><th scope="col">姓名</th><th scope="col">登录账号</th></tr></thead><tbody>${state.students.map(s => `<tr><td><span class="avatar">${esc(s.name.slice(0, 1))}</span>${esc(s.name)}</td><td class="mono">${esc(s.username)}</td></tr>`).join('')}</tbody></table></div>` : '<div class="empty"><h3>还没有学生</h3><p>先创建一个学生账号，再体验作业流程。</p></div>'}</section>
-    <aside class="panel"><span class="eyebrow">加入班级</span><h2>创建学生账号</h2><form id="student-form"><label>学生姓名<input name="name" required maxlength="30" autocomplete="off" placeholder="例如：小雨"></label><label>登录账号<input name="username" required minlength="3" maxlength="32" pattern="[a-zA-Z0-9_-]+" autocomplete="off" placeholder="例如：student03"><small>3–32 位字母、数字、下划线或短横线</small></label><label>初始密码<input name="password" type="password" required minlength="8" maxlength="128" autocomplete="new-password" placeholder="至少 8 个字符"><small>请自行记录并告知学生。</small></label><p class="form-error" id="student-error" role="alert"></p><button type="submit" class="button full">创建学生账号</button></form></aside></div>`;
+  const currentClass = state.classes.find(c => c.id === state.classId);
+  return `${classPicker()}${pageTitle('班级管理', '把同学们加进来', '创建账号并选择对应班级，将账号密码告知学生。')}
+    <div class="class-management panel"><form id="class-form"><label>新班级名称<input name="className" required maxlength="30" placeholder="例如：二班"></label><button class="button" type="submit">创建班级</button></form><form id="rename-class-form"><label>当前班级名称<input name="renameClassName" required maxlength="30" value="${esc(currentClass.name)}"></label><button class="button secondary" type="submit">修改名称</button></form><p id="class-error" class="form-error" role="alert"></p></div>
+    <p class="small muted">调整班级会改变新作业的可见范围和按当前名单的统计，已存成绩不删除；升级前的历史作业仍可续做和回看。</p><div class="teacher-layout"><section class="panel"><div class="section-heading"><h2>${esc(currentClass.name)} · 学生名单</h2><span class="badge">${state.students.length} 人</span></div>${state.students.length ? `<div class="table-wrap"><table><thead><tr><th scope="col">姓名</th><th scope="col">登录账号</th><th scope="col">所在班级</th></tr></thead><tbody>${state.students.map(s => `<tr><td><span class="avatar">${esc(s.name.slice(0, 1))}</span>${esc(s.name)}</td><td class="mono">${esc(s.username)}</td><td><select data-student-class="${s.id}" aria-label="${esc(s.name)}的班级">${classOptions(s.classId)}</select></td></tr>`).join('')}</tbody></table></div>` : '<div class="empty"><h3>本班还没有学生</h3><p>创建学生账号，或切换班级调整已有学生的归属。</p></div>'}</section>
+    <aside class="panel"><span class="eyebrow">加入班级</span><h2>创建学生账号</h2><form id="student-form"><label>学生姓名<input name="name" required maxlength="30" autocomplete="off" placeholder="例如：小雨"></label><label>所在班级<select name="classId">${classOptions()}</select></label><label>登录账号<input name="username" required minlength="3" maxlength="32" pattern="[a-zA-Z0-9_-]+" autocomplete="off" placeholder="例如：student03"><small>3–32 位字母、数字、下划线或短横线</small></label><label>初始密码<input name="password" type="password" required minlength="8" maxlength="128" autocomplete="new-password" placeholder="至少 8 个字符"><small>请自行记录并告知学生。</small></label><p class="form-error" id="student-error" role="alert"></p><button type="submit" class="button full">创建学生账号</button></form></aside></div>`;
 }
 function reportView(a) {
-  return `<a class="back-link" href="#/">← 返回班级作业</a>${pageTitle('作业成绩', esc(a.title), `${assignmentSummary(a)} · 满分 100 分 · ${date(a.createdAt)} 发布 · ${deadline(a)}`, '<button class="button secondary" data-action="refresh">刷新成绩 ↻</button>')}
+  return `<a class="back-link" href="#/">← 返回班级作业</a>${classPicker(a.classes)}${pageTitle('作业成绩', esc(a.title), `${assignmentSummary(a)} · 满分 100 分 · ${date(a.createdAt)} 发布 · ${deadline(a)}`, '<button class="button secondary" data-action="refresh">刷新成绩 ↻</button>')}
     <div class="report-stats"><div><span>已交人数</span><strong>${a.submitted}<small> / ${a.total} 人</small></strong></div><div><span>未交人数</span><strong>${a.pending}<small> 人</small></strong></div><div><span>班级平均分</span><strong>${a.average ?? '—'}<small>${a.average === null ? ' 暂无提交' : ' 分'}</small></strong></div></div>
     <section class="panel"><div class="section-heading"><h2>每位同学的进度</h2><span class="muted small">平均分仅计算已提交学生</span></div><div class="table-wrap"><table><thead><tr><th scope="col">学生</th><th scope="col">账号</th><th scope="col">作业状态</th><th scope="col">提交时间</th><th scope="col">成绩 / 100</th></tr></thead><tbody>${a.students.map(s => `<tr><td><span class="avatar">${esc(s.name.slice(0, 1))}</span>${esc(s.name)}</td><td class="mono">${esc(s.username)}</td><td>${badge({ ...s, dueAt: a.dueAt, isClosed: a.isClosed })}</td><td>${date(s.submittedAt)}</td><td class="score-cell">${s.score ?? '—'}</td></tr>`).join('') || '<tr><td colspan="5">还没有学生，请前往学生名单创建账号。</td></tr>'}</tbody></table></div></section><details class="panel questions-details"><summary>查看本次题目（${a.questionCount} 题）</summary><div class="question-preview">${a.expressions.map((expression, i) => `<span>${i + 1}.　${esc(expression)} = ?</span>`).join('')}</div></details>`;
 }
@@ -134,13 +141,23 @@ async function load() {
   const epoch = ++loadEpoch;
   state.loading = true; state.loadError = ''; state.assignment = null; render();
   try {
+    if (state.user.role === 'teacher') {
+      const [classes, practiceOptions] = await Promise.all([api('/classes'), api('/practice-options')]);
+      if (epoch !== loadEpoch) return;
+      state.classes = classes; state.practiceOptions = practiceOptions;
+      if (!classes.some(c => c.id === state.classId)) state.classId = classes[0].id;
+    }
     const match = location.hash.match(/^#\/assignment\/([1-9]\d*)$/);
     if (match) {
-      const a = await api(`/assignments/${match[1]}`);
+      let a = await api(`/assignments/${match[1]}`);
+      if (state.user.role === 'teacher') {
+        if (!a.classIds.includes(state.classId)) state.classId = a.classIds[0];
+        a = await api(`/assignments/${match[1]}/report?classId=${state.classId}`);
+      }
       if (epoch !== loadEpoch) return; state.assignment = a;
     } else if (state.user.role === 'teacher') {
-      const [assignments, students, practiceOptions] = await Promise.all([api('/assignments'), api('/students'), api('/practice-options')]);
-      if (epoch !== loadEpoch) return; state.assignments = assignments; state.students = students; state.practiceOptions = practiceOptions;
+      const [assignments, students] = await Promise.all([api(`/assignments?classId=${state.classId}`), api(`/students?classId=${state.classId}`)]);
+      if (epoch !== loadEpoch) return; state.assignments = assignments; state.students = students;
     } else {
       const assignments = await api('/assignments');
       if (epoch !== loadEpoch) return; state.assignments = assignments;
@@ -170,11 +187,18 @@ root.addEventListener('submit', async event => {
   });
   if (form.id === 'publish-form') await formAction(form, 'publish-error', async data => {
     const options = data.category === 'mixed-100' ? { grade: Number(data.grade), knowledgePoints: new FormData(form).getAll('knowledgePoints'), difficulty: data.difficulty } : {};
-    const a = await api('/assignments', 'POST', { ...data, ...options, questionCount: Number(data.questionCount), timeLimitMinutes: data.timeLimitMinutes ? Number(data.timeLimitMinutes) : null, dueAt: data.dueAt ? `${data.dueAt}+08:00` : null }); toast('作业已发布，全班学生可以开始作答。');
+    const classIds = new FormData(form).getAll('classIds').map(Number);
+    const a = await api('/assignments', 'POST', { ...data, ...options, classIds, questionCount: Number(data.questionCount), timeLimitMinutes: data.timeLimitMinutes ? Number(data.timeLimitMinutes) : null, dueAt: data.dueAt ? `${data.dueAt}+08:00` : null }); toast('作业已发布，所选班级学生可以开始作答。');
     location.hash = `#/assignment/${a.id}`;
   });
   if (form.id === 'student-form') await formAction(form, 'student-error', async data => {
-    const student = await api('/students', 'POST', data); await load(); toast(`已创建 ${student.name} 的账号：${student.username}`);
+    const student = await api('/students', 'POST', { ...data, classId: Number(data.classId) }); await load(); toast(`已创建 ${student.name} 的账号：${student.username}`);
+  });
+  if (form.id === 'class-form') await formAction(form, 'class-error', async data => {
+    const classroom = await api('/classes', 'POST', { name: data.className }); state.classId = classroom.id; await load(); toast('班级已创建');
+  });
+  if (form.id === 'rename-class-form') await formAction(form, 'class-error', async data => {
+    await api(`/classes/${state.classId}`, 'PUT', { name: data.renameClassName }); await load(); toast('班级名称已更新');
   });
   if (form.id === 'answer-form' && !state.busy) {
     if (closed(state.assignment)) { syncDeadlineUI(); errorAt('answer-error', closedMessage); }
@@ -214,7 +238,17 @@ root.addEventListener('input', event => {
     document.querySelector('#save-state').textContent = '有未保存的修改';
   }
 });
-root.addEventListener('change', event => { if (event.target.name === 'category' || event.target.name === 'grade') syncPracticeFields(); });
+root.addEventListener('change', async event => {
+  if (event.target.name === 'category' || event.target.name === 'grade') syncPracticeFields();
+  if (state.busy) return;
+  if (event.target.name === 'currentClass') { state.classId = Number(event.target.value); await load(); }
+  if (event.target.dataset.studentClass) {
+    state.busy = true;
+    try { await api(`/students/${event.target.dataset.studentClass}`, 'PUT', { classId: Number(event.target.value) }); await load(); toast('学生班级已更新'); }
+    catch (e) { toast(e.message, true); await load(); }
+    finally { state.busy = false; }
+  }
+});
 root.addEventListener('click', async event => {
   const action = event.target.closest('[data-action]')?.dataset.action;
   if (state.busy && (event.target.closest('a') || action)) { event.preventDefault(); return; }

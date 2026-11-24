@@ -264,6 +264,47 @@ test('北京时间发布、页面到点保留答案、逾期存草稿和已交�
   }, undefined, { clock: () => currentTime });
 });
 
+test('班级页面建班分配学生、同卷发布和切班成绩互不混入', async () => {
+  await withPages(async ({ app, page, login }) => {
+    const teacher = await page(); await login(teacher, 'teacher', 'Teacher123!'); teacher.click('a[href="#/students"]');
+    await waitFor(() => teacher.d.querySelector('#class-form'), '班级管理');
+    const changeClass = async id => {
+      const select = teacher.d.querySelector('[name="currentClass"]'); select.value = String(id);
+      select.dispatchEvent(new teacher.w.Event('change', { bubbles: true }));
+      await waitFor(() => teacher.d.querySelector('[name="currentClass"]')?.value === String(id) && !teacher.d.querySelector('.loading'), '切换班级');
+    };
+    teacher.fill('renameClassName', '一班'); teacher.submit('rename-class-form');
+    await waitFor(() => teacher.d.querySelector('[name="currentClass"]').textContent.includes('一班'), '原班级改名');
+    teacher.fill('className', '二班'); teacher.submit('class-form');
+    await waitFor(() => teacher.d.querySelector('[name="currentClass"]')?.value === '2', '创建二班');
+    const createStudent = async (username, name) => {
+      teacher.fill('name', name); teacher.fill('username', username); teacher.fill('password', 'Student123!'); teacher.submit('student-form');
+      await waitFor(() => teacher.d.querySelector('tbody')?.textContent.includes(username), '建立本班学生');
+    };
+    await createStudent('zhou', '小周'); await changeClass(1); await createStudent('lin', '小林');
+    teacher.click('nav a[href="#/"]'); await waitFor(() => teacher.d.querySelector('#publish-form'), '回发布页');
+    teacher.fill('title', '只发一班'); teacher.submit('publish-form'); await waitFor(() => teacher.d.querySelector('.report-stats'), '单班发布');
+    teacher.click('.back-link'); await waitFor(() => teacher.d.querySelector('#publish-form'), '再次发布');
+    teacher.fill('title', '两个班同一套题'); teacher.fill('questionCount', 20); teacher.d.querySelector('[name="classIds"][value="2"]').checked = true; teacher.submit('publish-form');
+    await waitFor(() => teacher.d.querySelector('.report-stats'), '双班发布');
+    const id = Number(teacher.w.location.hash.split('/').at(-1));
+    const questions = JSON.parse(app.db.prepare('SELECT questions FROM assignments WHERE id=?').get(id).questions);
+    const pupils = [];
+    for (const [username, expectedCount] of [['lin', 2], ['zhou', 1]]) {
+      const p = await page(); await login(p, username, 'Student123!'); assert.equal(p.d.querySelectorAll('.student-card').length, expectedCount);
+      p.click(`a[href="#/assignment/${id}"]`); await waitFor(() => p.d.querySelector('#answer-form'), '学生答同卷');
+      questions.forEach((q, i) => p.fill(`answer-${i}`, username === 'lin' && i === 0 ? (solution(q) + 1) % 21 : solution(q)));
+      p.submit('answer-form'); p.click('#confirm-submit'); await waitFor(() => p.d.querySelector('.score-stamp'), '学生提交同卷'); pupils.push(p);
+    }
+    teacher.click('[data-action="refresh"]'); await waitFor(() => teacher.d.querySelector('.score-cell')?.textContent === '95', '一班成绩');
+    assert.ok(teacher.d.querySelector('tbody').textContent.includes('小林')); assert.ok(!teacher.d.querySelector('tbody').textContent.includes('小周'));
+    await changeClass(2);
+    assert.equal(teacher.d.querySelector('.score-cell').textContent, '100');
+    assert.ok(teacher.d.querySelector('tbody').textContent.includes('小周')); assert.ok(!teacher.d.querySelector('tbody').textContent.includes('小林'));
+    assert.deepEqual([...teacher.d.querySelectorAll('.report-stats strong')].map(n => n.firstChild.textContent), ['1', '0', '100']);
+  });
+});
+
 test('混合练习表单按年级选择知识点与提高难度', async () => {
   await withPages(async ({ app, page, login }) => {
     const teacher = await page(); await login(teacher, 'teacher', 'Teacher123!');

@@ -1,6 +1,7 @@
 import { createServer } from 'node:http';
 import { createHash, randomBytes } from 'node:crypto';
 import { openStore, hashPassword, verifyPassword, publishAssignment, solution, formatExpression, inferCategory, categories, questionCounts } from './store.mjs';
+import { mixedOptions, practiceOptions } from './questions.mjs';
 
 class HttpError extends Error {
   constructor(status, message) { super(message); this.status = status; }
@@ -61,6 +62,8 @@ function readAssignment(row) {
   return {
     id: row.id, title: row.title, createdAt: row.created_at, category, questionCount: questions.length, dueAt: row.due_at ?? null,
     timeLimitMinutes: row.time_limit_minutes ?? null,
+    difficulty: row.difficulty ?? null, grade: row.mixed_grade ?? null, knowledgePoints: row.knowledge_points ? JSON.parse(row.knowledge_points) : [],
+    knowledgePointNames: row.knowledge_points ? JSON.parse(row.knowledge_points).map(id => practiceOptions.topics.find(t => t.id === id)?.name ?? id) : [],
     answerMax: category === 'mixed-100' ? 100 : 20,
     questions, expressions: questions.map(q => formatExpression(q))
   };
@@ -155,6 +158,7 @@ export async function createApp({ dbPath = 'data/classwork.sqlite', teacherPassw
         WHERE s.token_hash=? AND s.expires>?`).get(digest(rawToken), Date.now());
       if (!user) fail(401, '请先登录');
       if (path === '/api/me' && req.method === 'GET') return send(200, safeUser(user));
+      if (path === '/api/practice-options' && req.method === 'GET') { requireRole(user, 'teacher'); return send(200, practiceOptions); }
       if (path === '/api/logout' && req.method === 'POST') {
         db.prepare('DELETE FROM sessions WHERE token_hash=?').run(digest(rawToken));
         return send(200, { ok: true }, { 'Set-Cookie': cookie('', 0) });
@@ -194,7 +198,11 @@ export async function createApp({ dbPath = 'data/classwork.sqlite', teacherPassw
           const dueAt = validateDueAt(input.dueAt, clock());
           const timeLimitMinutes = input.timeLimitMinutes ?? null;
           if (timeLimitMinutes !== null && (!Number.isInteger(timeLimitMinutes) || timeLimitMinutes < 1 || timeLimitMinutes > 1440)) fail(400, '个人限时请填写 1–1440 的整数分钟，或留空');
-          const id = publishAssignment(db, title, { category, questionCount, dueAt, timeLimitMinutes });
+          let options = {};
+          if (category === 'mixed-100') {
+            try { options = mixedOptions(input); } catch (e) { fail(400, e.message); }
+          }
+          const id = publishAssignment(db, title, { category, questionCount, dueAt, timeLimitMinutes, ...options });
           return send(201, report(assignment(id)));
         }
       }

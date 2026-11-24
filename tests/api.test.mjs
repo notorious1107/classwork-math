@@ -392,6 +392,7 @@ test('INC-001 已有班级在合成迁移库副本上继续使用', async t => {
         }
       }
       assert.deepEqual(snapshot(db), before);
+      assert.deepEqual(db.prepare('SELECT difficulty,question_count FROM assignments ORDER BY id').all().map(a => [a.difficulty, a.question_count]), [['basic', 10], ['advanced', 10], [null, 10]]);
     });
     const cookie = students[2];
     await t.test('混合题草稿续答、范围校验、提交与教师汇总', async () => {

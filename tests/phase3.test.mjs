@@ -4,7 +4,8 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createApp } from '../backend/app.mjs';
-import { solution } from '../backend/store.mjs';
+import { solution, generateQuestions, formatExpression } from '../backend/store.mjs';
+import { practiceOptions } from '../backend/questions.mjs';
 
 async function fixture(run) {
   const dir = await mkdtemp(join(tmpdir(), 'classwork-phase3-'));
@@ -72,5 +73,47 @@ test('个人限时：独立起点、幂等开始、全班截止取较早者及�
     assert.equal((await request(limitedPath + '/submit', zhou.cookie, 'POST', { answers: limited.questions.map(solution) })).status, 409);
     assert.equal((await request(limitedPath + '/start', lin.cookie, 'POST', {})).status, 409);
     assert.equal((await request(path + '/submit', zhou.cookie, 'POST', { answers })).body.score, 100);
+  });
+});
+
+test('知识点生成：基础2步、提高3步，整除范围与每一步实际运算', () => {
+  const inspect = q => {
+    if (typeof q === 'number') { assert.ok(Number.isInteger(q) && q > 0 && q <= 100); return { answer: q, steps: 0 }; }
+    const a = inspect(q.a), b = inspect(q.b);
+    if (q.op === '*') { assert.ok(a.answer > 1); assert.ok(b.answer > 1); }
+    if (q.op === '/') { assert.ok(b.answer > 1); assert.ok(a.answer > b.answer); assert.equal(a.answer % b.answer, 0); }
+    const answer = q.op === '+' ? a.answer + b.answer : q.op === '-' ? a.answer - b.answer : q.op === '*' ? a.answer * b.answer : a.answer / b.answer;
+    assert.ok(Number.isInteger(answer) && answer > 0 && answer <= 100);
+    return { answer, steps: a.steps + b.steps + 1 };
+  };
+  for (const topic of practiceOptions.topics) for (const difficulty of ['basic', 'advanced']) for (const count of [10, 20, 50]) {
+    for (let round = 0; round < 5; round++) {
+      const questions = generateQuestions('mixed-100', count, { grade: topic.minGrade, knowledgePoints: [topic.id], difficulty });
+      assert.equal(questions.length, count); assert.equal(new Set(questions.map(q => JSON.stringify(q))).size, count);
+      for (const q of questions) {
+        const checked = inspect(q); assert.equal(checked.steps, difficulty === 'basic' ? 2 : 3); assert.equal(checked.answer, solution(q));
+        const expression = formatExpression(q);
+        if (topic.id === 'parentheses') assert.match(expression, /\(/);
+        else assert.doesNotMatch(expression, /\(/);
+        if (topic.id === 'precedence') { assert.match(expression, /[×÷]/); assert.match(expression, /[＋−]/); }
+        if (topic.id === 'add-sub-chain') assert.doesNotMatch(expression, /[×÷]/);
+        if (topic.id === 'mul-div-chain') assert.doesNotMatch(expression, /[＋−]/);
+      }
+    }
+  }
+});
+
+test('混合题配置经API校验并持久保存，年级知识点与难度可回看', async () => {
+  await fixture(async ({ request, teacher, restart }) => {
+    const catalog = await request('/practice-options', teacher); assert.equal(catalog.status, 200);
+    for (const input of [{ grade: 0 }, { grade: '3' }, { knowledgePoints: [] }, { knowledgePoints: ['unknown'] }, { grade: 1, knowledgePoints: ['parentheses'] }, { knowledgePoints: ['precedence', 'precedence'] }, { difficulty: null }, { difficulty: 'hard' }]) {
+      assert.equal((await request('/assignments', teacher, 'POST', { title: '无效配置', category: 'mixed-100', ...input })).status, 400);
+    }
+    const created = await request('/assignments', teacher, 'POST', { title: '提高括号', category: 'mixed-100', grade: 3, knowledgePoints: ['parentheses'], difficulty: 'advanced', questionCount: 50 });
+    assert.equal(created.status, 201); const a = created.body;
+    assert.equal(a.grade, 3); assert.equal(a.difficulty, 'advanced'); assert.deepEqual(a.knowledgePoints, ['parentheses']);
+    await restart();
+    const restored = (await request(`/assignments/${a.id}`, teacher)).body;
+    assert.deepEqual(restored, a);
   });
 });

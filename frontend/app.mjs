@@ -1,7 +1,7 @@
 const root = document.querySelector('#app');
 const notice = document.querySelector('#notice');
 const dialog = document.querySelector('#submit-dialog');
-const state = { user: null, assignments: [], students: [], assignment: null, dirty: false, busy: false, route: '', loading: false, loadError: '' };
+const state = { user: null, assignments: [], students: [], practiceOptions: null, assignment: null, dirty: false, busy: false, route: '', loading: false, loadError: '' };
 let loadEpoch = 0;
 let toastTimer;
 const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
@@ -65,13 +65,31 @@ const categoryNames = {
   'add-sub-20': '20 以内加减', 'mul-div-20': '20 以内乘除', 'mixed-100': '100 以内混合运算'
 };
 function assignmentSummary(a) {
-  return `${categoryNames[a.category]} · ${a.questionCount} 题${a.timeLimitMinutes ? ` · 个人限时 ${a.timeLimitMinutes} 分钟` : ''}`;
+  return `${categoryNames[a.category]} · ${a.questionCount} 题${a.grade ? ` · ${a.grade} 年级 · ${a.difficulty === 'advanced' ? '提高' : '基础'} · ${esc(a.knowledgePointNames.join('、'))}` : ''}${a.timeLimitMinutes ? ` · 个人限时 ${a.timeLimitMinutes} 分钟` : ''}`;
+}
+function practiceFields() {
+  const p = state.practiceOptions;
+  if (!p) return '';
+  return `<fieldset id="practice-fields" class="practice-fields" hidden disabled><legend>混合练习内容</legend><label>年级<select name="grade">${p.grades.map(g => `<option value="${g}" ${g === 3 ? 'selected' : ''}>${g} 年级</option>`).join('')}</select></label><div class="topic-options"><span>勾选本班已学知识点</span>${p.topics.map(t => `<label data-min-grade="${t.minGrade}"><input type="checkbox" name="knowledgePoints" value="${t.id}" ${['precedence', 'parentheses'].includes(t.id) ? 'checked' : ''}>${esc(t.name)}</label>`).join('')}</div><label>练习难度<select name="difficulty">${p.difficulties.map(d => `<option value="${d.id}">${esc(d.name)}</option>`).join('')}</select></label><small>年级用于筛选，按本班实际学习进度勾选。提高题增加实际运算步数，数字仍在 100 以内。</small></fieldset>`;
+}
+function syncPracticeFields() {
+  const fields = document.querySelector('#practice-fields');
+  if (!fields) return;
+  fields.hidden = fields.disabled = document.querySelector('[name="category"]').value !== 'mixed-100';
+  if (fields.disabled) return;
+  const grade = Number(fields.querySelector('[name="grade"]').value);
+  for (const label of fields.querySelectorAll('[data-min-grade]')) {
+    const unavailable = Number(label.dataset.minGrade) > grade;
+    label.hidden = unavailable; label.querySelector('input').disabled = unavailable;
+    if (unavailable) label.querySelector('input').checked = false;
+  }
+  if (!fields.querySelector('input:checked:not(:disabled)')) fields.querySelector('input:not(:disabled)').checked = true;
 }
 function teacherHome() {
   return `${pageTitle('教师工作台', '每一份练习，都看得见', `全班 ${state.students.length} 名学生 · 已发布 ${state.assignments.length} 份作业`, '<button class="button secondary" data-action="refresh">刷新成绩 ↻</button>')}
     <div class="teacher-layout"><section><div class="section-heading"><h2>班级作业</h2><span class="muted">最新发布在前</span></div>
     ${state.assignments.length ? `<div class="assignment-list">${state.assignments.map(a => `<a class="assignment-card" href="#/assignment/${a.id}"><div class="card-top"><span class="eyebrow">${assignmentSummary(a)}</span><span class="arrow">↗</span></div><h3>${esc(a.title)}</h3><p class="muted">发布于 ${date(a.createdAt)}<br>${deadline(a)}</p><div class="card-stats"><div><strong>${a.submitted}<small> / ${a.total}</small></strong><span>已交人数</span></div><div><strong>${a.pending}</strong><span>未交人数</span></div><div><strong>${a.average ?? '—'}</strong><span>平均分</span></div></div></a>`).join('')}</div>` : '<div class="empty"><span class="empty-symbol">＋ −</span><h3>从第一份练习开始</h3><p>选择题型和题量，发布全班的计算练习。</p></div>'}</section>
-    <aside class="panel publish-panel"><span class="eyebrow">一份小练习</span><h2>发布新作业</h2><p class="muted">每次选择一种题型，全班完成同一套题，满分 100 分。</p><form id="publish-form"><label>作业名称<input name="title" required maxlength="60" placeholder="例如：周三计算小练习"></label><label>练习题型<select name="category">${Object.entries(categoryNames).map(([value, label]) => `<option value="${value}">${label}</option>`).join('')}</select></label><label>题目数量<select name="questionCount">${[10, 20, 50].map(n => `<option value="${n}">${n} 道</option>`).join('')}</select></label><label>每人作答时间（分钟，可选）<input type="number" name="timeLimitMinutes" min="1" max="1440" step="1" placeholder="例如：20"><small>留空则不限制个人时长，点击开始后连续计时。</small></label><label>截止时间（北京时间，可选）<input type="datetime-local" name="dueAt" step="60"><small>留空则不限时；到点停止提交，仍可保存草稿。</small></label><div class="paper-spec"><span>总分<strong>100 分，按答对比例计分</strong></span><span>面向学生<strong>全班学生</strong></span></div><p class="form-error" id="publish-error" role="alert"></p><button type="submit" class="button full">发布作业 ＋</button></form><p class="small muted">发布后学生即可开始作答。新加入的学生也能看到历史作业。</p></aside></div>`;
+    <aside class="panel publish-panel"><span class="eyebrow">一份小练习</span><h2>发布新作业</h2><p class="muted">每次选择一种题型，全班完成同一套题，满分 100 分。</p><form id="publish-form"><label>作业名称<input name="title" required maxlength="60" placeholder="例如：周三计算小练习"></label><label>练习题型<select name="category">${Object.entries(categoryNames).map(([value, label]) => `<option value="${value}">${label}</option>`).join('')}</select></label>${practiceFields()}<label>题目数量<select name="questionCount">${[10, 20, 50].map(n => `<option value="${n}">${n} 道</option>`).join('')}</select></label><label>每人作答时间（分钟，可选）<input type="number" name="timeLimitMinutes" min="1" max="1440" step="1" placeholder="例如：20"><small>留空则不限制个人时长，点击开始后连续计时。</small></label><label>截止时间（北京时间，可选）<input type="datetime-local" name="dueAt" step="60"><small>留空则不限时；到点停止提交，仍可保存草稿。</small></label><div class="paper-spec"><span>总分<strong>100 分，按答对比例计分</strong></span><span>面向学生<strong>全班学生</strong></span></div><p class="form-error" id="publish-error" role="alert"></p><button type="submit" class="button full">发布作业 ＋</button></form><p class="small muted">发布后学生即可开始作答。新加入的学生也能看到历史作业。</p></aside></div>`;
 }
 function studentsView() {
   return `${pageTitle('班级管理', '把同学们加进来', '创建账号后，将账号和密码告知对应学生。')}
@@ -109,6 +127,7 @@ function render() {
   else view = state.user.role === 'teacher' ? teacherHome() : studentHome();
   root.innerHTML = `${header()}${state.user ? `<main class="main">${view}</main>` : view}<footer>小小算术 <span>·</span> 每天进步一点点</footer>`;
   syncDeadlineUI();
+  syncPracticeFields();
 }
 async function load() {
   if (!state.user) { render(); return; }
@@ -120,8 +139,8 @@ async function load() {
       const a = await api(`/assignments/${match[1]}`);
       if (epoch !== loadEpoch) return; state.assignment = a;
     } else if (state.user.role === 'teacher') {
-      const [assignments, students] = await Promise.all([api('/assignments'), api('/students')]);
-      if (epoch !== loadEpoch) return; state.assignments = assignments; state.students = students;
+      const [assignments, students, practiceOptions] = await Promise.all([api('/assignments'), api('/students'), api('/practice-options')]);
+      if (epoch !== loadEpoch) return; state.assignments = assignments; state.students = students; state.practiceOptions = practiceOptions;
     } else {
       const assignments = await api('/assignments');
       if (epoch !== loadEpoch) return; state.assignments = assignments;
@@ -150,7 +169,8 @@ root.addEventListener('submit', async event => {
     history.replaceState(null, '', '#/'); await load();
   });
   if (form.id === 'publish-form') await formAction(form, 'publish-error', async data => {
-    const a = await api('/assignments', 'POST', { ...data, questionCount: Number(data.questionCount), timeLimitMinutes: data.timeLimitMinutes ? Number(data.timeLimitMinutes) : null, dueAt: data.dueAt ? `${data.dueAt}+08:00` : null }); toast('作业已发布，全班学生可以开始作答。');
+    const options = data.category === 'mixed-100' ? { grade: Number(data.grade), knowledgePoints: new FormData(form).getAll('knowledgePoints'), difficulty: data.difficulty } : {};
+    const a = await api('/assignments', 'POST', { ...data, ...options, questionCount: Number(data.questionCount), timeLimitMinutes: data.timeLimitMinutes ? Number(data.timeLimitMinutes) : null, dueAt: data.dueAt ? `${data.dueAt}+08:00` : null }); toast('作业已发布，全班学生可以开始作答。');
     location.hash = `#/assignment/${a.id}`;
   });
   if (form.id === 'student-form') await formAction(form, 'student-error', async data => {
@@ -184,6 +204,7 @@ async function saveAnswers(submit = false) {
   finally { state.busy = false; fieldset.disabled = false; form.querySelectorAll('button').forEach(b => { b.disabled = false; }); syncDeadlineUI(); }
 }
 root.addEventListener('input', event => {
+  if (event.target.name === 'category' || event.target.name === 'grade') syncPracticeFields();
   if (event.target.closest('#answer-form')) {
     state.dirty = true;
     const inputs = [...document.querySelectorAll('.equation input')];
@@ -193,6 +214,7 @@ root.addEventListener('input', event => {
     document.querySelector('#save-state').textContent = '有未保存的修改';
   }
 });
+root.addEventListener('change', event => { if (event.target.name === 'category' || event.target.name === 'grade') syncPracticeFields(); });
 root.addEventListener('click', async event => {
   const action = event.target.closest('[data-action]')?.dataset.action;
   if (state.busy && (event.target.closest('a') || action)) { event.preventDefault(); return; }

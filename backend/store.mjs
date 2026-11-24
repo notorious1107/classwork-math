@@ -3,6 +3,7 @@ import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { randomBytes, scrypt as scryptCallback, timingSafeEqual, randomInt } from 'node:crypto';
 import { promisify } from 'node:util';
+import { generateMixed, mixedOptions } from './questions.mjs';
 
 const scrypt = promisify(scryptCallback);
 export async function hashPassword(password) {
@@ -27,30 +28,15 @@ function binaryQuestion(op, max) {
   if (!candidates.length) return binaryQuestion(op, max);
   return { a, b: candidates[randomInt(candidates.length)], op };
 }
-export function generateQuestions(category = 'add-sub-20', questionCount = 10) {
+export function generateQuestions(category = 'add-sub-20', questionCount = 10, options) {
   if (!categories.includes(category) || !questionCounts.includes(questionCount)) throw new Error('无效的作业题型或题量');
+  if (category === 'mixed-100') return generateMixed(questionCount, options);
   const questions = [];
   const used = new Set();
   while (questions.length < questionCount) {
     let q;
-    if (category === 'mixed-100') {
-      const ops = ['+', '-', '*', '/'];
-      const inner = binaryQuestion(ops[questions.length % 4], 100);
-      const op = ops[(questions.length + 1) % 4];
-      const right = randomInt(2) === 1;
-      const value = solution(inner);
-      const candidates = Array.from({ length: 101 }, (_, n) => n).filter(n => {
-        const a = right ? n : value, b = right ? value : n;
-        const result = operators[op].apply(a, b);
-        return (op !== '/' || b !== 0) && Number.isInteger(result) && result >= 0 && result <= 100;
-      });
-      if (!candidates.length) continue;
-      const n = candidates[randomInt(candidates.length)];
-      q = { a: right ? n : inner, b: right ? inner : n, op };
-    } else {
-      const ops = category === 'add-sub-20' ? ['+', '-'] : ['*', '/'];
-      q = binaryQuestion(ops[questions.length % 2], 20);
-    }
+    const ops = category === 'add-sub-20' ? ['+', '-'] : ['*', '/'];
+    q = binaryQuestion(ops[questions.length % 2], 20);
     const key = JSON.stringify(q);
     if (used.has(key)) continue;
     used.add(key);
@@ -59,9 +45,12 @@ export function generateQuestions(category = 'add-sub-20', questionCount = 10) {
   return questions;
 }
 
-export function publishAssignment(db, title, { category = 'add-sub-20', questionCount = 10, dueAt = null, timeLimitMinutes = null } = {}) {
-  const result = db.prepare('INSERT INTO assignments(title,questions,created_at,category,due_at,time_limit_minutes) VALUES(?,?,?,?,?,?)')
-    .run(title, JSON.stringify(generateQuestions(category, questionCount)), new Date().toISOString(), category, dueAt, timeLimitMinutes);
+export function publishAssignment(db, title, { category = 'add-sub-20', questionCount = 10, dueAt = null, timeLimitMinutes = null, ...input } = {}) {
+  const options = category === 'mixed-100' ? mixedOptions(input) : null;
+  const result = db.prepare(`INSERT INTO assignments(title,questions,created_at,category,due_at,time_limit_minutes,question_count,difficulty,mixed_grade,knowledge_points)
+    VALUES(?,?,?,?,?,?,?,?,?,?)`)
+    .run(title, JSON.stringify(generateQuestions(category, questionCount, options)), new Date().toISOString(), category, dueAt, timeLimitMinutes,
+      questionCount, options?.difficulty ?? null, options?.grade ?? null, options ? JSON.stringify(options.knowledgePoints) : null);
   return Number(result.lastInsertRowid);
 }
 
@@ -131,6 +120,9 @@ export async function openStore(path, teacherPassword = 'Teacher123!') {
   }
   if (!db.prepare("SELECT 1 FROM pragma_table_info('assignments') WHERE name='time_limit_minutes'").get()) {
     db.exec('ALTER TABLE assignments ADD COLUMN time_limit_minutes INTEGER');
+  }
+  for (const [name, type] of [['question_count', 'INTEGER'], ['difficulty', 'TEXT'], ['mixed_grade', 'INTEGER'], ['knowledge_points', 'TEXT']]) {
+    if (!db.prepare("SELECT 1 FROM pragma_table_info('assignments') WHERE name=?").get(name)) db.exec(`ALTER TABLE assignments ADD COLUMN ${name} ${type}`);
   }
   db.exec(`CREATE TABLE IF NOT EXISTS assignment_starts (
     assignment_id INTEGER NOT NULL REFERENCES assignments(id), student_id INTEGER NOT NULL REFERENCES users(id),

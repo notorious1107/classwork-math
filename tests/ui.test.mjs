@@ -264,6 +264,25 @@ test('北京时间发布、页面到点保留答案、逾期存草稿和已交�
   }, undefined, { clock: () => currentTime });
 });
 
+test('混合练习表单按年级选择知识点与提高难度', async () => {
+  await withPages(async ({ app, page, login }) => {
+    const teacher = await page(); await login(teacher, 'teacher', 'Teacher123!');
+    assert.equal(teacher.d.querySelector('#practice-fields').hidden, true);
+    teacher.fill('category', 'mixed-100'); assert.equal(teacher.d.querySelector('#practice-fields').hidden, false);
+    teacher.fill('grade', 1);
+    assert.equal(teacher.d.querySelector('input[value="parentheses"]').disabled, true);
+    assert.equal(teacher.d.querySelector('input[value="add-sub-chain"]').checked, true);
+    teacher.fill('grade', 3);
+    for (const checkbox of teacher.d.querySelectorAll('[name="knowledgePoints"]')) checkbox.checked = checkbox.value === 'parentheses';
+    teacher.fill('difficulty', 'advanced'); teacher.fill('title', '三年级提高括号'); teacher.submit('publish-form');
+    await waitFor(() => teacher.d.querySelector('.report-stats'), '发布提高题');
+    assert.ok(teacher.d.querySelector('.page-title p').textContent.includes('3 年级 · 提高'));
+    const row = app.db.prepare('SELECT difficulty,mixed_grade,knowledge_points FROM assignments').get();
+    assert.equal(row.difficulty, 'advanced'); assert.equal(row.mixed_grade, 3); assert.equal(row.knowledge_points, '["parentheses"]');
+    for (const item of teacher.d.querySelectorAll('.question-preview span')) assert.ok(item.textContent.includes('('));
+  });
+});
+
 test('个人限时页面：开始后倒计时、刷新续计、到时保留答案与保存草稿', async () => {
   let current = Date.parse('2026-11-24T11:00:00Z');
   await withPages(async ({ app, page, login }) => {

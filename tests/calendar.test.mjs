@@ -29,6 +29,7 @@ test('教师月历按北京时间发布日期归类、分班统计、月界和�
     const shared = await publish('周二两班同卷，周四截止', '2026-11-24T00:05:00+08:00', [1, 2], '2026-11-26T20:00+08:00');
     const pending = await publish('周二第二份', '2026-11-24T11:00:00Z');
     const onlySecond = await publish('二班专属', '2026-11-24T09:00:00Z', [2]);
+    const zero = await publish('有人提交但得零分', '2026-11-25T04:00:00Z');
     await publish('十月最后一刻', '2026-10-31T15:59:59.999Z');
     const first = await publish('十一月第一刻', '2026-10-31T16:00:00.000Z');
     const last = await publish('十一月最后一刻', '2026-11-30T15:59:59.999Z');
@@ -38,17 +39,19 @@ test('教师月历按北京时间发布日期归类、分班统计、月界和�
     const correct = shared.questions.map(solution), wrong = correct.map((v, i) => i === 0 ? (v + 1) % 21 : v);
     assert.equal((await request(`/assignments/${shared.id}/submit`, lin, 'POST', { answers: wrong })).body.score, 90);
     assert.equal((await request(`/assignments/${shared.id}/submit`, zhou, 'POST', { answers: correct })).body.score, 100);
+    assert.equal((await request(`/assignments/${zero.id}/submit`, lin, 'POST', { answers: zero.questions.map(q => (solution(q) + 1) % 21) })).body.score, 0);
     const snapshot = () => ['assignments', 'users', 'submissions'].map(table => app.db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all());
     const before = snapshot();
     const result = await request('/calendar?classId=1&month=2026-11', teacher), month = result.body;
     assert.equal(result.status, 200); assert.equal(month.month, '2026-11'); assert.equal(month.timeZone, 'Asia/Shanghai'); assert.equal(month.today, '2026-11-24');
-    assert.equal(month.days.length, 30); assert.equal(month.total, 4);
+    assert.equal(month.days.length, 30); assert.equal(month.total, 5);
     const day = month.days.find(d => d.date === '2026-11-24');
     assert.deepEqual(day.assignments.map(a => a.id), [pending.id, shared.id]);
     const paper = day.assignments.find(a => a.id === shared.id);
     assert.equal(paper.dueAt, '2026-11-26T12:00:00.000Z'); assert.equal(paper.submitted, 1); assert.equal(paper.pending, 1); assert.equal(paper.average, 90);
     assert.equal(paper.questions, undefined); assert.equal(paper.students, undefined);
     assert.equal(day.assignments.find(a => a.id === pending.id).average, null);
+    assert.equal(month.days.find(d => d.date === '2026-11-25').assignments[0].average, 0);
     assert.equal(month.days[0].assignments[0].id, first.id); assert.equal(month.days[29].assignments[0].id, last.id);
     assert.equal(month.days.find(d => d.date === '2026-11-26').assignments.length, 0);
     const second = (await request('/calendar?classId=2&month=2026-11', teacher)).body;

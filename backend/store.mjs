@@ -59,9 +59,9 @@ export function generateQuestions(category = 'add-sub-20', questionCount = 10) {
   return questions;
 }
 
-export function publishAssignment(db, title, { category = 'add-sub-20', questionCount = 10, dueAt = null } = {}) {
-  const result = db.prepare('INSERT INTO assignments(title,questions,created_at,category,due_at) VALUES(?,?,?,?,?)')
-    .run(title, JSON.stringify(generateQuestions(category, questionCount)), new Date().toISOString(), category, dueAt);
+export function publishAssignment(db, title, { category = 'add-sub-20', questionCount = 10, dueAt = null, timeLimitMinutes = null } = {}) {
+  const result = db.prepare('INSERT INTO assignments(title,questions,created_at,category,due_at,time_limit_minutes) VALUES(?,?,?,?,?,?)')
+    .run(title, JSON.stringify(generateQuestions(category, questionCount)), new Date().toISOString(), category, dueAt, timeLimitMinutes);
   return Number(result.lastInsertRowid);
 }
 
@@ -129,6 +129,13 @@ export async function openStore(path, teacherPassword = 'Teacher123!') {
   if (!db.prepare("SELECT 1 FROM pragma_table_info('assignments') WHERE name='due_at'").get()) {
     db.exec('ALTER TABLE assignments ADD COLUMN due_at TEXT');
   }
+  if (!db.prepare("SELECT 1 FROM pragma_table_info('assignments') WHERE name='time_limit_minutes'").get()) {
+    db.exec('ALTER TABLE assignments ADD COLUMN time_limit_minutes INTEGER');
+  }
+  db.exec(`CREATE TABLE IF NOT EXISTS assignment_starts (
+    assignment_id INTEGER NOT NULL REFERENCES assignments(id), student_id INTEGER NOT NULL REFERENCES users(id),
+    started_at TEXT NOT NULL, PRIMARY KEY(assignment_id,student_id)
+  )`);
   if (!db.prepare("SELECT id FROM users WHERE role='teacher'").get()) {
     db.prepare('INSERT INTO users(username,name,password_hash,role) VALUES(?,?,?,?)')
       .run('teacher', '数学老师', await hashPassword(teacherPassword), 'teacher');

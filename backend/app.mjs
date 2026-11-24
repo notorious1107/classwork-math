@@ -60,6 +60,7 @@ function readAssignment(row) {
   const category = row.category ?? inferCategory(questions);
   return {
     id: row.id, title: row.title, createdAt: row.created_at, category, questionCount: questions.length, dueAt: row.due_at ?? null,
+    timeLimitMinutes: row.time_limit_minutes ?? null,
     answerMax: category === 'mixed-100' ? 100 : 20,
     questions, expressions: questions.map(q => formatExpression(q))
   };
@@ -79,9 +80,18 @@ export async function createApp({ dbPath = 'data/classwork.sqlite', teacherPassw
   }
   function studentView(a, studentId) {
     const s = db.prepare('SELECT * FROM submissions WHERE assignment_id=? AND student_id=?').get(a.id, studentId);
-    const result = { ...a, isClosed: isClosed(a),
+    const start = db.prepare('SELECT started_at FROM assignment_starts WHERE assignment_id=? AND student_id=?').get(a.id, studentId);
+    const personalDue = a.timeLimitMinutes && start ? Date.parse(start.started_at) + a.timeLimitMinutes * 60_000 : null;
+    const deadlines = [a.dueAt && Date.parse(a.dueAt), personalDue].filter(v => v !== null && v !== false);
+    const effectiveDueAt = deadlines.length ? new Date(Math.min(...deadlines)).toISOString() : null;
+    const result = { ...a, startedAt: start?.started_at ?? null, effectiveDueAt,
+      isClosed: effectiveDueAt !== null && clock() >= Date.parse(effectiveDueAt),
       answers: s ? JSON.parse(s.answers) : Array(a.questionCount).fill(null), savedAt: s?.saved_at ?? null,
       submittedAt: s?.submitted_at ?? null, score: s?.score ?? null };
+    if (a.timeLimitMinutes) result.serverNow = new Date(clock()).toISOString();
+    if (a.timeLimitMinutes && !start && !s?.submitted_at) {
+      result.questions = []; result.expressions = []; result.answers = [];
+    }
     if (s?.submitted_at) result.results = a.questions.map((q, i) => {
       const correctAnswer = solution(q);
       return { correctAnswer, correct: result.answers[i] === correctAnswer };
@@ -182,11 +192,13 @@ export async function createApp({ dbPath = 'data/classwork.sqlite', teacherPassw
           if (!categories.includes(category)) fail(400, '请选择一种有效题型');
           if (!questionCounts.includes(questionCount)) fail(400, '题目数量请选择 10、20 或 50 道');
           const dueAt = validateDueAt(input.dueAt, clock());
-          const id = publishAssignment(db, title, { category, questionCount, dueAt });
+          const timeLimitMinutes = input.timeLimitMinutes ?? null;
+          if (timeLimitMinutes !== null && (!Number.isInteger(timeLimitMinutes) || timeLimitMinutes < 1 || timeLimitMinutes > 1440)) fail(400, '个人限时请填写 1–1440 的整数分钟，或留空');
+          const id = publishAssignment(db, title, { category, questionCount, dueAt, timeLimitMinutes });
           return send(201, report(assignment(id)));
         }
       }
-      const match = path.match(/^\/api\/assignments\/([1-9]\d*)(?:\/(draft|submit|report))?$/);
+      const match = path.match(/^\/api\/assignments\/([1-9]\d*)(?:\/(draft|submit|report|start))?$/);
       if (match) {
         const a = assignment(Number(match[1]));
         const action = match[2];
@@ -195,6 +207,15 @@ export async function createApp({ dbPath = 'data/classwork.sqlite', teacherPassw
         }
         if (!action && req.method === 'GET') {
           return send(200, user.role === 'teacher' ? report(a) : studentView(a, user.id));
+        }
+        if (action === 'start' && req.method === 'POST') {
+          requireRole(user, 'student'); await body(req);
+          const view = studentView(a, user.id);
+          if (view.startedAt || view.submittedAt) return send(200, view);
+          if (isClosed(a)) fail(409, '作业已截止，不能开始作答');
+          db.prepare('INSERT OR IGNORE INTO assignment_starts(assignment_id,student_id,started_at) VALUES(?,?,?)')
+            .run(a.id, user.id, new Date(clock()).toISOString());
+          return send(200, studentView(a, user.id));
         }
         if ((action === 'draft' && req.method === 'PUT') || (action === 'submit' && req.method === 'POST')) {
           requireRole(user, 'student');
@@ -210,12 +231,13 @@ export async function createApp({ dbPath = 'data/classwork.sqlite', teacherPassw
             if (action === 'submit') return send(200, latest);
             fail(409, '作业已提交，不能再修改答案');
           }
+          if (a.timeLimitMinutes && !latest.startedAt) fail(400, '请先点击开始作答');
           const answers = validateAnswers(input.answers, action === 'submit', a.answerMax, a.questionCount);
           const correct = a.questions.filter((q, i) => solution(q) === answers[i]).length;
           const score = action === 'submit' ? correct * 100 / a.questionCount : null;
           const stamp = clock();
-          if (action === 'submit' && a.dueAt !== null && stamp >= Date.parse(a.dueAt)) {
-            fail(409, '作业已截止，不能再提交；仍可保存草稿，老师处计为未交');
+          if (action === 'submit' && latest.effectiveDueAt !== null && stamp >= Date.parse(latest.effectiveDueAt)) {
+            fail(409, '作业已截止或个人时间已用完，不能再提交；仍可保存草稿，老师处计为未交');
           }
           const savedAt = new Date(stamp).toISOString();
           const written = db.prepare(`INSERT INTO submissions(assignment_id,student_id,answers,saved_at,submitted_at,score)

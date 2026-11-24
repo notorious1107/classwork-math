@@ -32,6 +32,7 @@ async function withPages(run, seed, options = {}) {
     const dom = new JSDOM(html, { url: base + '/' + hash, runScripts: 'outside-only' });
     const w = dom.window; windows.push(w);
     if (session.now) w.Date.now = session.now;
+    if (session.monotonic) w.performance.now = session.monotonic;
     w.scrollTo = () => {};
     w.confirm = () => true;
     w.HTMLDialogElement.prototype.showModal = function () { this.open = true; };
@@ -261,6 +262,34 @@ test('北京时间发布、页面到点保留答案、逾期存草稿和已交�
     assert.ok(resumed.d.querySelector('.badge').textContent.includes('已截止'));
     assert.ok(resumed.d.querySelector('.page-title p').textContent.includes('已截止未交'));
   }, undefined, { clock: () => currentTime });
+});
+
+test('个人限时页面：开始后倒计时、刷新续计、到时保留答案与保存草稿', async () => {
+  let current = Date.parse('2026-11-24T11:00:00Z');
+  await withPages(async ({ app, page, login }) => {
+    const teacher = await page(); await login(teacher, 'teacher', 'Teacher123!');
+    app.db.prepare("INSERT INTO users(username,name,password_hash,role) SELECT 'timed','计时学生',password_hash,'student' FROM users WHERE role='teacher'").run();
+    teacher.fill('title', '20分钟练习'); teacher.fill('timeLimitMinutes', 20); teacher.submit('publish-form');
+    await waitFor(() => teacher.d.querySelector('.report-stats'), '发布限时作业');
+    let pupil = await page({ cookie: '', monotonic: () => current }); await login(pupil, 'timed', 'Teacher123!'); pupil.click('.student-card');
+    await waitFor(() => pupil.d.querySelector('[data-action="start"]'), '打开开始说明');
+    assert.equal(pupil.d.querySelector('#answer-form'), null);
+    pupil.click('[data-action="start"]');
+    await waitFor(() => pupil.d.querySelector('#countdown'), '开始倒计时');
+    assert.ok(pupil.d.querySelector('#countdown').textContent.includes('20 分 00 秒'));
+    pupil.fill('answer-0', 7); pupil.click('[data-action="save"]');
+    await waitFor(() => pupil.d.querySelector('#save-state').textContent.includes('草稿保存于'), '保存限时草稿');
+    const session = pupil.session, hash = pupil.w.location.hash; pupil.w.close();
+    current += 5 * 60_000; pupil = await page(session, hash);
+    assert.ok(pupil.d.querySelector('#countdown').textContent.includes('15 分 00 秒'));
+    assert.equal(pupil.d.querySelector('#answer-0').value, '7');
+    pupil.fill('answer-1', 9); current += 15 * 60_000;
+    await waitFor(() => pupil.d.querySelector('[data-submit]').disabled, '个人到时禁交');
+    assert.equal(pupil.d.querySelector('#answer-1').value, '9');
+    pupil.click('[data-action="save"]');
+    await waitFor(() => pupil.d.querySelector('#save-state').textContent.includes('草稿保存于'), '个人到时仍可存草稿');
+    assert.equal(pupil.d.querySelector('.score-stamp'), null);
+  }, undefined, { clock: () => current });
 });
 
 test('INC-001 师生页面显示历史算式、续做混合草稿并回看批改', async () => {

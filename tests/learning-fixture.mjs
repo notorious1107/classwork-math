@@ -3,6 +3,14 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createApp } from '../backend/app.mjs';
+import { DatabaseSync } from 'node:sqlite';
+import { createHistoryClass } from './history-fixture.mjs';
+
+export async function createRevisionClass(path) {
+  await createHistoryClass(path); const db = new DatabaseSync(path);
+  try { db.exec('ALTER TABLE submissions ADD COLUMN draft_revision INTEGER DEFAULT 0'); db.prepare('UPDATE submissions SET draft_revision=17 WHERE assignment_id=33 AND student_id=4').run(); }
+  finally { db.close(); }
+}
 
 export async function withLearning(run, seed) {
   const dir = await mkdtemp(join(tmpdir(), 'classwork-learning-')), dbPath = join(dir, 'test.sqlite');

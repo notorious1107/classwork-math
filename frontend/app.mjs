@@ -4,7 +4,7 @@ const dialog = document.querySelector('#submit-dialog');
 const state = { user: null, assignments: [], students: [], classes: [], classId: null, importResult: null, studentQuery: '', calendarData: null, calendarDay: '', calendarBack: null, historyData: null, reviewData: null, mistakes: null, correction: null, mistakeHistories: {}, practiceOptions: null, assignment: null, dirty: false, busy: false, route: '', loading: false, loadError: '' };
 let loadEpoch = 0;
 let toastTimer;
-state.analyticsData = null; state.analyticsAll = false;
+state.analyticsData = null; state.analyticsAll = false; state.passwordStudent = null;
 state.preview = null; state.publishDraft = null; state.previewFingerprint = ''; state.previewStale = false;
 function resetPublish() { state.preview = null; state.publishDraft = null; state.previewFingerprint = ''; state.previewStale = false; }
 const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
@@ -44,7 +44,7 @@ async function api(path, method = 'GET', data) {
   for (const a of Array.isArray(result) ? result : [result]) if (a.serverNow) a.receivedAt = performance.now();
   if (!response.ok) {
     if (response.status === 401 && state.user) {
-      loadEpoch++; resetPublish(); state.user = null; state.dirty = false; state.assignment = null; state.assignments = []; state.students = []; state.importResult = null; state.studentQuery = ''; state.analyticsData = null; state.calendarData = null; state.calendarBack = null; state.historyData = null; state.reviewData = null; state.mistakes = null; state.correction = null; state.mistakeHistories = {}; render();
+      loadEpoch++; resetPublish(); state.user = null; state.dirty = false; state.assignment = null; state.assignments = []; state.students = []; state.importResult = null; state.studentQuery = ''; state.passwordStudent = null; state.analyticsData = null; state.calendarData = null; state.calendarBack = null; state.historyData = null; state.reviewData = null; state.mistakes = null; state.correction = null; state.mistakeHistories = {}; render();
     }
     throw Object.assign(new Error(result.error || '操作失败，请重试'), { status: response.status });
   }
@@ -58,9 +58,14 @@ function header() {
   const inCalendar = routePath() === '#/calendar' || !!state.calendarBack;
   const inStudents = routePath().startsWith('#/students') || (state.reviewData && new URLSearchParams(location.hash.split('?')[1]).has('historyClassId'));
   const inMistakes = routePath().startsWith('#/mistakes');
+  const inPassword = routePath() === '#/password';
   return `<header class="header"><a href="#/" class="brand"><span class="brand-mark">＋</span><span>小小算术<small>班级作业本</small></span></a>
-    ${state.user ? `<nav aria-label="主导航"><a href="#/" ${!inStudents && !inCalendar && !inMistakes && !inAnalytics ? 'aria-current="page"' : ''}>${state.user.role === 'teacher' ? '作业与成绩' : '我的作业'}</a>${state.user.role === 'teacher' ? `<a href="#/calendar" ${inCalendar ? 'aria-current="page"' : ''}>练习月历</a><a href="#/analytics" ${inAnalytics ? 'aria-current="page"' : ''}>班级学情</a><a href="#/students" ${inStudents ? 'aria-current="page"' : ''}>学生名单</a>` : `<a href="#/mistakes" ${inMistakes ? 'aria-current="page"' : ''}>我的错题本</a>`}</nav>
+    ${state.user ? `<nav aria-label="主导航"><a href="#/" ${!inStudents && !inCalendar && !inMistakes && !inAnalytics && !inPassword ? 'aria-current="page"' : ''}>${state.user.role === 'teacher' ? '作业与成绩' : '我的作业'}</a>${state.user.role === 'teacher' ? `<a href="#/calendar" ${inCalendar ? 'aria-current="page"' : ''}>练习月历</a><a href="#/analytics" ${inAnalytics ? 'aria-current="page"' : ''}>班级学情</a><a href="#/students" ${inStudents ? 'aria-current="page"' : ''}>学生名单</a>` : `<a href="#/mistakes" ${inMistakes ? 'aria-current="page"' : ''}>我的错题本</a><a href="#/password" ${inPassword ? 'aria-current="page"' : ''}>修改密码</a>`}</nav>
     <div class="user"><span>${esc(state.user.name)}<small>${state.user.role === 'teacher' ? '教师' : '学生'} · ${esc(state.user.username)}</small></span><button class="text-button" data-action="logout">退出</button></div>` : '<span class="header-note">每天练一练，一点点进步。</span>'}</header>`;
+}
+function passwordView() {
+  const pupil = state.passwordStudent, reset = !!pupil, target = pupil ?? state.user;
+  return `<a class="back-link" href="${reset ? `#/students?classId=${state.classId}` : '#/'}">← 返回${reset ? '本班名单' : '我的作业'}</a>${pageTitle('账号管理', reset ? '重设学生密码' : '修改我的密码', reset ? '请按学号核对学生，再填写新密码。' : '填写原密码，将初始密码换成自己记得住的新密码。')}<section class="panel password-panel"><div class="password-target"><strong>${esc(target.name)}</strong><p>学号 / 账号：<b>${esc(target.username)}</b>${reset ? `<br>班级：${esc(state.classes.find(c => c.id === state.classId)?.name)}` : ''}</p></div><form id="password-form">${reset ? '' : '<label>原密码<input type="password" name="currentPassword" autocomplete="current-password" required maxlength="128"></label>'}<label>新密码<input type="password" name="newPassword" autocomplete="new-password" minlength="8" maxlength="128" required><small>8–128 个字符，请自行记录。</small></label><label>再输入一次新密码<input type="password" name="confirmPassword" autocomplete="new-password" minlength="8" maxlength="128" required></label><p class="small muted">${reset ? '只重设上述账号的密码。该学生需要用新密码重新登录，请把新密码告知本人。' : '修改成功后本窗口可继续使用，其他窗口需要用新密码重新登录。'}</p><p id="password-error" class="form-error" role="alert"></p><p id="password-success" class="password-success" role="status"></p><button class="button" type="submit">${reset ? '确认重设此人密码' : '确认修改密码'}</button></form></section>`;
 }
 function loginView() {
   return `<main class="login-layout"><section class="login-story"><span class="eyebrow">把计算，练成小本领</span><h1>今天也来<br>算一算<span class="blue">。</span></h1><p>打开自己的作业本，<br>认真思考，再写下答案。</p>
@@ -254,7 +259,7 @@ function matchingStudents() {
   return state.students.filter(s => s.name.toLowerCase().includes(query) || s.username.toLowerCase().includes(query));
 }
 function studentsTable(students) {
-  return students.length ? `<div class="table-wrap"><table><thead><tr><th scope="col">姓名</th><th scope="col">学号 / 登录账号</th><th scope="col">所在班级</th></tr></thead><tbody>${students.map(s => `<tr><td><a class="student-record-link" href="${historyHref(s.id)}"><span class="avatar">${esc(s.name.slice(0, 1))}</span>${esc(s.name)}<small>练习记录 →</small></a></td><td class="mono">${esc(s.username)}</td><td><select data-student-class="${s.id}" aria-label="${esc(s.name)}（${esc(s.username)}）的班级">${classOptions(s.classId)}</select></td></tr>`).join('')}</tbody></table></div>` : state.students.length ? '<div class="empty"><h3>没有找到匹配的学生</h3><p>可更换姓名或学号，或清空搜索查看整班名单。</p></div>' : '<div class="empty"><h3>本班还没有学生</h3><p>导入名单、创建账号，或切换班级调整已有学生的归属。</p></div>';
+  return students.length ? `<div class="table-wrap"><table><thead><tr><th scope="col">姓名</th><th scope="col">学号 / 登录账号</th><th scope="col">所在班级</th><th scope="col">账号操作</th></tr></thead><tbody>${students.map(s => `<tr><td><a class="student-record-link" href="${historyHref(s.id)}"><span class="avatar">${esc(s.name.slice(0, 1))}</span>${esc(s.name)}<small>练习记录 →</small></a></td><td class="mono">${esc(s.username)}</td><td><select data-student-class="${s.id}" aria-label="${esc(s.name)}（${esc(s.username)}）的班级">${classOptions(s.classId)}</select></td><td><a class="reset-password-link" href="#/students/${s.id}/password?classId=${state.classId}" aria-label="重设 ${esc(s.name)}（${esc(s.username)}）的密码">重设密码</a></td></tr>`).join('')}</tbody></table></div>` : state.students.length ? '<div class="empty"><h3>没有找到匹配的学生</h3><p>可更换姓名或学号，或清空搜索查看整班名单。</p></div>' : '<div class="empty"><h3>本班还没有学生</h3><p>导入名单、创建账号，或切换班级调整已有学生的归属。</p></div>';
 }
 function updateStudentSearch() {
   const list = document.querySelector('#student-list');
@@ -331,6 +336,7 @@ function render() {
   if (!state.user) view = loginView();
   else if (state.loading) view = '<p class="loading">正在打开作业本…</p>';
   else if (state.loadError) view = `<section class="empty panel"><h2>作业本暂时没有打开</h2><p>${esc(state.loadError)}</p><button class="button" data-action="refresh">重新加载</button><p><a href="#/">返回作业列表</a></p></section>`;
+  else if (state.passwordStudent || (routePath() === '#/password' && state.user.role === 'student')) view = passwordView();
   else if (state.correction) view = correctionView();
   else if (state.mistakes) view = mistakesView();
   else if (state.reviewData) view = reviewView(state.reviewData);
@@ -349,7 +355,7 @@ function render() {
 async function load() {
   if (!state.user) { render(); return; }
   const epoch = ++loadEpoch;
-  state.loading = true; state.loadError = ''; state.assignment = null; state.analyticsData = null; state.calendarData = null; state.calendarBack = null; state.historyData = null; state.reviewData = null; state.mistakes = null; state.correction = null; state.mistakeHistories = {}; render();
+  state.loading = true; state.loadError = ''; state.assignment = null; state.passwordStudent = null; state.analyticsData = null; state.calendarData = null; state.calendarBack = null; state.historyData = null; state.reviewData = null; state.mistakes = null; state.correction = null; state.mistakeHistories = {}; render();
   try {
     const path = routePath(), params = new URLSearchParams(location.hash.split('?')[1] ?? '');
     if (state.user.role === 'teacher') {
@@ -382,6 +388,12 @@ async function load() {
       if (epoch !== loadEpoch) return;
       state.analyticsData = data; state.analyticsAll = params.get('all') === '1';
       history.replaceState(null, '', analyticsHref({ filters: data.filters, selection: data.selectedQuestion }));
+    } else if (/^#\/students\/[1-9]\d*\/password$/.test(path) && state.user.role === 'teacher') {
+      const students = await api(`/students?classId=${state.classId}`);
+      if (epoch !== loadEpoch) return;
+      const pupil = students.find(s => s.id === Number(path.split('/')[2]));
+      if (!pupil) throw new Error('该学生不在当前班级，请返回名单重新选择');
+      state.passwordStudent = pupil;
     } else if (historyMatch && state.user.role === 'teacher') {
       const students = await api(`/students?classId=${state.classId}`);
       if (epoch !== loadEpoch) return;
@@ -450,6 +462,14 @@ async function formAction(form, errorId, action) {
 root.addEventListener('submit', async event => {
   event.preventDefault();
   const form = event.target;
+  if (form.id === 'password-form') await formAction(form, 'password-error', async data => {
+    document.querySelector('#password-success').textContent = '';
+    if (data.newPassword !== data.confirmPassword) throw new Error('两次输入的新密码不一致');
+    const pupil = state.passwordStudent;
+    await api(pupil ? `/students/${pupil.id}/password` : '/me/password', 'PUT', pupil ? { classId: state.classId, newPassword: data.newPassword } : { currentPassword: data.currentPassword, newPassword: data.newPassword });
+    form.reset();
+    document.querySelector('#password-success').textContent = pupil ? `已重设 ${pupil.name}（${pupil.username}）的密码，请告知该学生。` : '密码已修改，请在下次登录时使用新密码。';
+  });
   if (form.id === 'analytics-filter-form' && !state.busy) {
     const filters = Object.fromEntries(new FormData(form));
     if (filters.from && filters.to && filters.from > filters.to) { errorAt('analytics-error', '开始日期不能晚于结束日期'); return; }
@@ -465,7 +485,7 @@ root.addEventListener('submit', async event => {
   }
   if (form.id === 'login-form') await formAction(form, 'login-error', async data => {
     resetPublish();
-    state.user = await api('/login', 'POST', data); state.dirty = false; state.assignments = []; state.students = []; state.importResult = null; state.studentQuery = ''; state.analyticsData = null; state.calendarData = null; state.calendarBack = null; state.historyData = null; state.reviewData = null; state.mistakes = null; state.correction = null; state.mistakeHistories = {}; state.assignment = null;
+    state.user = await api('/login', 'POST', data); state.dirty = false; state.assignments = []; state.students = []; state.importResult = null; state.studentQuery = ''; state.passwordStudent = null; state.analyticsData = null; state.calendarData = null; state.calendarBack = null; state.historyData = null; state.reviewData = null; state.mistakes = null; state.correction = null; state.mistakeHistories = {}; state.assignment = null;
     history.replaceState(null, '', '#/'); await load();
   });
   if (form.id === 'publish-form') await requestPreview(form);
@@ -603,7 +623,7 @@ root.addEventListener('click', async event => {
   if (action === 'logout') {
     if (state.dirty && !confirm('还有未保存的答案。确定退出并放弃这些修改吗？')) return;
     state.busy = true;
-    try { await api('/logout', 'POST', {}); loadEpoch++; resetPublish(); state.user = null; state.assignment = null; state.assignments = []; state.students = []; state.importResult = null; state.studentQuery = ''; state.analyticsData = null; state.calendarData = null; state.calendarBack = null; state.historyData = null; state.reviewData = null; state.mistakes = null; state.correction = null; state.mistakeHistories = {}; state.dirty = false; history.replaceState(null, '', '#/'); render(); }
+    try { await api('/logout', 'POST', {}); loadEpoch++; resetPublish(); state.user = null; state.assignment = null; state.assignments = []; state.students = []; state.importResult = null; state.studentQuery = ''; state.passwordStudent = null; state.analyticsData = null; state.calendarData = null; state.calendarBack = null; state.historyData = null; state.reviewData = null; state.mistakes = null; state.correction = null; state.mistakeHistories = {}; state.dirty = false; history.replaceState(null, '', '#/'); render(); }
     catch (e) { toast(e.message, true); }
     finally { state.busy = false; }
   }

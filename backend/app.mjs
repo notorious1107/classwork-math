@@ -192,7 +192,7 @@ export async function createApp({ dbPath = 'data/classwork.sqlite', teacherPassw
         // Use a real hash even for unknown users to avoid a fast username probe.
         const fallback = db.prepare("SELECT password_hash FROM users WHERE role='teacher'").get().password_hash;
         const valid = await verifyPassword(password, u?.password_hash ?? fallback);
-        if (!u || !valid) {
+        if (!u || !valid || db.prepare('SELECT password_hash FROM users WHERE id=?').get(u.id)?.password_hash !== u.password_hash) {
           entry.count++; attempts.set(key, entry);
           fail(401, '账号或密码不正确');
         }
@@ -206,7 +206,33 @@ export async function createApp({ dbPath = 'data/classwork.sqlite', teacherPassw
       const user = rawToken && db.prepare(`SELECT u.* FROM users u JOIN sessions s ON s.user_id=u.id
         WHERE s.token_hash=? AND s.expires>?`).get(digest(rawToken), Date.now());
       if (!user) fail(401, '请先登录');
+      const recheckSession = () => {
+        if (!db.prepare('SELECT 1 FROM sessions WHERE token_hash=? AND user_id=? AND expires>?').get(digest(rawToken), user.id, Date.now())) fail(401, '登录已失效，请重新登录');
+      };
       if (path === '/api/me' && req.method === 'GET') return send(200, safeUser(user));
+      if (path === '/api/me/password' && req.method === 'PUT') {
+        requireRole(user, 'student');
+        const input = await body(req), currentPassword = textField(input.currentPassword, '原密码', 1, 128), password = textField(input.newPassword, '新密码', 8, 128);
+        if (!await verifyPassword(currentPassword, user.password_hash)) fail(400, '原密码不正确');
+        const hash = await hashPassword(password);
+        recheckSession();
+        const changed = db.prepare("UPDATE users SET password_hash=? WHERE id=? AND role='student' AND password_hash=?").run(hash, user.id, user.password_hash);
+        if (!changed.changes) fail(409, '密码已在其他窗口改变，请重新登录后重试');
+        db.prepare('DELETE FROM sessions WHERE user_id=? AND token_hash<>?').run(user.id, digest(rawToken));
+        return send(200, { ok: true });
+      }
+      const passwordMatch = path.match(/^\/api\/students\/([1-9]\d*)\/password$/);
+      if (passwordMatch && req.method === 'PUT') {
+        requireRole(user, 'teacher');
+        const input = await body(req), classId = validClassId(input.classId), pupil = student(Number(passwordMatch[1]));
+        if ((pupil.class_id ?? 1) !== classId) fail(404, '该学生不在当前班级');
+        const hash = await hashPassword(textField(input.newPassword, '新密码', 8, 128));
+        recheckSession();
+        const changed = db.prepare("UPDATE users SET password_hash=? WHERE id=? AND role='student' AND COALESCE(class_id,1)=?").run(hash, pupil.id, classId);
+        if (!changed.changes) fail(409, '学生已转班，请刷新当前名单后重试');
+        db.prepare('DELETE FROM sessions WHERE user_id=?').run(pupil.id);
+        return send(200, { ok: true, student: safeUser(pupil) });
+      }
       if (path === '/api/assignment-previews/current' && req.method === 'GET') { requireRole(user, 'teacher'); return send(200, { preview: readPreview(db, user.id) }); }
       if (path === '/api/assignment-previews' && req.method === 'POST') {
         requireRole(user, 'teacher'); const settings = assignmentSettings(await body(req));

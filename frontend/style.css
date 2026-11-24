@@ -200,6 +200,13 @@ select{font:inherit;display:block;width:100%;border:1px solid #cbd6e8;border-rad
 .preview-actions{flex-wrap:wrap;justify-content:flex-end;border-top:1px dashed var(--line);padding-top:24px}
 .preview-actions .button:disabled{cursor:not-allowed}
 #publish-form{scroll-margin-top:24px}
+.password-panel{max-width:560px}
+.password-target{background:#f4f7ff;border-radius:10px;padding:18px;margin-bottom:24px}
+.password-target strong{font-size:20px}
+.password-target p{font-size:13px;margin:10px 0 0;line-height:1.9;overflow-wrap:anywhere}
+.password-panel form>label+label{margin-top:18px}
+.password-success{color:#176a4c;font-size:13px}
+.reset-password-link{white-space:nowrap;font-size:12px}
 .analytics-filters{display:flex;gap:24px;align-items:flex-start;margin-bottom:28px}
 .analytics-filters .class-picker{min-width:130px}
 #analytics-filter-form{display:grid;grid-template-columns:1fr 1fr auto;gap:12px 20px;align-items:end;flex:1}

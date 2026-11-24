@@ -771,6 +771,26 @@ test('学情无人提交与零分展示、断网重试、无效题号和延迟�
   });
 });
 
+test('学生自行改密与教师按学号重设同名学生，提示、权限、重新登录和草稿保留', async () => {
+  await withPages(async ({ app, page, login }) => {
+    const ids = seedAnalytics(app.db), pupil = await page(); await login(pupil,'lin','Teacher123!');
+    pupil.click('nav a[href="#/password"]');await waitFor(()=>pupil.d.querySelector('#password-form'),'学生改密');
+    pupil.fill('currentPassword','wrong');pupil.fill('newPassword','MyStudent123!');pupil.fill('confirmPassword','Mismatch123!');pupil.submit('password-form');
+    await waitFor(()=>pupil.d.querySelector('#password-error').textContent.includes('不一致'),'重复密码校验');
+    pupil.fill('confirmPassword','MyStudent123!');pupil.submit('password-form');await waitFor(()=>pupil.d.querySelector('#password-error').textContent.includes('原密码不正确'),'原密码校验');
+    pupil.fill('currentPassword','Teacher123!');pupil.submit('password-form');await waitFor(()=>pupil.d.querySelector('#password-success').textContent.includes('密码已修改'),'改密成功');
+    assert.equal(pupil.d.querySelector('[name="newPassword"]').value,'');
+    pupil.click('[data-action="logout"]');await waitFor(()=>pupil.d.querySelector('#login-form'),'退出');await login(pupil,'lin','MyStudent123!');
+    const teacher=await page();await login(teacher,'teacher','Teacher123!');teacher.click('nav a[href="#/students"]');await waitFor(()=>teacher.d.querySelector('#student-form'),'教师名单');
+    teacher.fill('studentSearch','draft');teacher.click('.reset-password-link');await waitFor(()=>teacher.d.querySelector('#password-form'),'指定学号重设');
+    assert.ok(teacher.d.querySelector('.password-target').textContent.includes('张宁'));assert.ok(teacher.d.querySelector('.password-target').textContent.includes('draft'));
+    teacher.fill('newPassword','ResetStudent123!');teacher.fill('confirmPassword','ResetStudent123!');teacher.submit('password-form');await waitFor(()=>teacher.d.querySelector('#password-success').textContent.includes('draft'),'重设反馈');
+    const selected=await page();await login(selected,'draft','ResetStudent123!');selected.click(`a[href="#/assignment/${ids.a}"]`);await waitFor(()=>selected.d.querySelector('#answer-form'),'原草稿可续做');assert.equal(selected.d.querySelector('#answer-0').value,'0');
+    const sameName=await page();await login(sameName,'nan','Teacher123!');
+    teacher.w.location.hash=`#/students/${ids.ids.zhou}/password?classId=1`;await waitFor(()=>teacher.d.querySelector('.empty p')?.textContent.includes('不在当前班级'),'跨班拦截');
+  });
+});
+
 test('名单文件上传、逐行反馈、刷新名单与前导零账号登录', async () => {
   await withPages(async ({ app, base, page, login }) => {
     app.db.prepare("INSERT INTO classes(name) VALUES('二班')").run();

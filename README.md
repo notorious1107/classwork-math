@@ -127,3 +127,5 @@ node --experimental-sqlite --test --test-name-pattern=INC-001 tests/api.test.mjs
 教师月历接口为 GET /api/calendar?classId=1&month=2026-11，要求教师登录并选班。month 留空时使用服务端北京时间的当前月，返回逐日练习摘要；按 created_at（发布日期）的北京时间归类，dueAt（截止时间）单独保留，统计复用该班成绩报告。tests/calendar.test.mjs 覆盖午夜、月界、跨年、闰日、无人提交、分班统计、权限及读取不改原数据。
 
 月历页面测试还覆盖同日多份练习、截止日不代替发布日期、均分与明细一致、切班和刷新保留日期、跨年翻月、闰年月份、断网重试及延迟旧响应不覆盖新班级。另在内置 Chromium 中用独立合成班级核对周二两份作业、周四截止、两班均分 95/80、成绩明细往返及翻到下月；375 像素视口下可选择日期并阅读作业统计，无页面横向溢出。
+
+教师只读接口：GET /api/assignments/:assignmentId/students/:studentId?classId=1 按该班成绩名单读取学生原卷和最后一次保存的答案，已交返回逐题对错与原分数，草稿返回正确答案但不评对错、不计分。GET /api/students/:studentId/history?classId=1&from=2026-11-16&to=2026-11-22&topic=mul-div-20 查询当前班学生的练习记录；日期范围为北京时间发布日期，起止日均包含且可单独留空，topic 可按三种题型或已记录的混合知识点筛选。历史未记录细分知识点的作业仍可按题型查询。转班学生保留的升级前作业仍可查询并回到原班历史成绩名单。两个接口仅供教师使用，不改写题目、草稿、成绩或个人计时起点。

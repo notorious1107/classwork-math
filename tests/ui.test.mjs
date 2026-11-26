@@ -32,9 +32,10 @@ async function withPages(run, seed, options = {}) {
   await new Promise(resolve => web.listen(0, '127.0.0.1', resolve));
   const base = `http://127.0.0.1:${web.address().port}`;
   const windows = [];
-  async function page(session = { cookie: '' }, hash = '#/') {
+  async function page(session = { cookie: '' }, hash = '#/', storage = {}) {
     const dom = new JSDOM(html, { url: base + '/' + hash, runScripts: 'outside-only' });
     const w = dom.window; windows.push(w);
+    for (const [key, value] of Object.entries(storage)) w.localStorage.setItem(key, value);
     if (session.now) w.Date.now = session.now;
     if (session.monotonic) w.performance.now = session.monotonic;
     w.scrollTo = () => {};
@@ -861,6 +862,108 @@ test('保存并离开等待进行中的写入和最新修改，断网时留在�
     assert.deepEqual(JSON.parse(stored.answers).slice(0, 2), [1, 0]);
     assert.equal(stored.draft_revision, 2);
     assert.equal(stored.submitted_at, null);
+  });
+});
+
+test('自动保存遇到登录过期，重开浏览器后只有原账号可恢复最新输入', async () => {
+  await withPages(async ({ app, page, login }) => {
+    const { ids } = seedAnalytics(app.db);
+    const id = publishAssignment(app.db, '重新登录续写');
+    const route = `#/assignment/${id}`;
+    let pupil = await page();
+    await login(pupil, 'lin', 'Teacher123!');
+    pupil.click(`a[href="${route}"]`);
+    await waitFor(() => pupil.d.querySelector('#answer-form'), '打开作业');
+    app.db.prepare('UPDATE sessions SET expires=0 WHERE user_id=?').run(ids.lin);
+    pupil.fill('answer-0', 0);
+    pupil.fill('answer-1', 999);
+    await waitFor(() => pupil.d.querySelector('#login-form'), '自动保存要求重新登录');
+    assert.equal(pupil.d.querySelector('#answer-form'), null);
+    const storage = { ...pupil.w.localStorage };
+    pupil.w.close();
+    pupil = await page({ cookie: '' }, route, storage);
+    await login(pupil, 'nan', 'Teacher123!');
+    assert.ok(pupil.d.querySelector('.student-card'));
+    pupil.click(`a[href="${route}"]`);
+    await waitFor(() => pupil.d.querySelector('#answer-form'), '同班另一账号打开相同作业');
+    assert.equal(pupil.d.querySelector('#answer-0').value, '');
+    assert.equal(pupil.d.querySelector('#answer-1').value, '');
+    pupil.click('[data-action="logout"]');
+    await waitFor(() => pupil.d.querySelector('#login-form'), '换回原账号');
+    await login(pupil, 'lin', 'Teacher123!');
+    pupil.click(`a[href="${route}"]`);
+    await waitFor(() => pupil.d.querySelector('#answer-0')?.value === '0', '原账号恢复答案');
+    assert.equal(pupil.d.querySelector('#answer-1').value, '999');
+    assert.equal(pupil.d.querySelector('#progress').value, 2);
+    const stored = () => app.db.prepare('SELECT * FROM submissions WHERE assignment_id=? AND student_id=?').get(id, ids.lin);
+    await waitFor(() => pupil.d.querySelector('#save-state').textContent.includes('其他答案已保存'), '恢复后自动同步');
+    assert.deepEqual(JSON.parse(stored().answers).slice(0, 2), [0, null]);
+    pupil.fill('answer-1', 7);
+    pupil.click('[data-action="save-leave"]');
+    await waitFor(() => pupil.d.querySelector('.student-card'), '修正后离开');
+    assert.deepEqual(JSON.parse(stored().answers).slice(0, 2), [0, 7]);
+    assert.equal(stored().submitted_at, null);
+    assert.equal(pupil.w.localStorage.length, 0);
+  });
+});
+
+test('共享会话切换账号后旧页面的保存被拦截，原账号登录回原卷并处理较新版本', async () => {
+  await withPages(async ({ app, page, login }) => {
+    const { ids } = seedAnalytics(app.db);
+    const id = publishAssignment(app.db, '切换共享会话'), route = `#/assignment/${id}`;
+    const pupil = await page(), other = await page();
+    await login(pupil, 'lin', 'Teacher123!');
+    pupil.click(`a[href="${route}"]`);
+    await waitFor(() => pupil.d.querySelector('#answer-form'), '打开原卷');
+    const sameAccount = await page({ ...pupil.session }, route);
+    await login(other, 'nan', 'Teacher123!');
+    pupil.session.cookie = other.session.cookie;
+    pupil.fill('answer-0', 6);
+    pupil.click('[data-action="save-leave"]');
+    await waitFor(() => pupil.d.querySelector('#login-form'), '旧页面重新核对身份');
+    assert.equal(app.db.prepare('SELECT COUNT(*) AS n FROM submissions WHERE assignment_id=?').get(id).n, 0);
+    sameAccount.fill('answer-0', 9);
+    sameAccount.click('[data-action="save"]');
+    await waitFor(() => sameAccount.d.querySelector('#save-state').textContent.startsWith('已保存'), '另一窗口先写入');
+    await login(pupil, 'lin', 'Teacher123!');
+    assert.equal(pupil.w.location.hash, route);
+    assert.equal(pupil.d.querySelector('#answer-0').value, '6');
+    assert.equal(pupil.d.querySelector('#draft-conflict').hidden, false);
+    pupil.click('[data-action="save-leave"]');
+    assert.equal(pupil.w.location.hash, route);
+    const saved = app.db.prepare('SELECT answers FROM submissions WHERE assignment_id=? AND student_id=?').get(id, ids.lin);
+    assert.equal(JSON.parse(saved.answers)[0], 9);
+    pupil.click('[data-action="load-saved-draft"]');
+    await waitFor(() => pupil.d.querySelector('#answer-0')?.value === '9', '明确载入账号中草稿');
+    assert.equal(pupil.w.localStorage.length, 0);
+  });
+});
+
+test('登录中断后原卷已提交，恢复时显示批改结果并移除待恢复的答案', async () => {
+  await withPages(async ({ app, page, login }) => {
+    const { ids, key } = seedAnalytics(app.db);
+    const id = publishAssignment(app.db, '已提交草稿锁定'), route = `#/assignment/${id}`;
+    const pupil = await page();
+    await login(pupil, 'lin', 'Teacher123!');
+    pupil.click(`a[href="${route}"]`);
+    await waitFor(() => pupil.d.querySelector('#answer-form'), '打开原卷');
+    pupil.fill('answer-0', 19);
+    pupil.session.cookie = '';
+    pupil.submit('answer-form');
+    pupil.click('#confirm-submit');
+    await waitFor(() => pupil.d.querySelector('#login-form'), '提交时登录已失效');
+    const other = await page();
+    await login(other, 'lin', 'Teacher123!');
+    const response = await other.w.fetch(`/api/assignments/${id}/submit`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ answers: key })
+    });
+    assert.ok(response.ok);
+    await login(pupil, 'lin', 'Teacher123!');
+    assert.ok(pupil.d.querySelector('.score-stamp'));
+    assert.equal(pupil.d.querySelector('#answer-0').value, String(key[0]));
+    assert.equal(pupil.d.querySelector('[data-action="save-leave"]'), null);
+    assert.equal(pupil.w.localStorage.length, 0);
+    assert.equal(app.db.prepare('SELECT draft_revision FROM submissions WHERE assignment_id=? AND student_id=?').get(id, ids.lin).draft_revision, 1);
   });
 });
 

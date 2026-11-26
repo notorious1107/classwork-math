@@ -36,19 +36,25 @@ function toast(message, error = false) {
   toastTimer = setTimeout(() => { notice.hidden = true; }, error ? 8000 : 4000);
 }
 async function api(path, method = 'GET', data) {
+  const user = state.user;
+  const headers = data === undefined ? {} : { 'Content-Type': 'application/json' };
+  if (user) headers['X-Classwork-User'] = String(user.id);
   let response;
   try {
-    response = await fetch(`/api${path}`, { method, credentials: 'same-origin',
-      headers: data === undefined ? {} : { 'Content-Type': 'application/json' },
+    response = await fetch(`/api${path}`, { method, credentials: 'same-origin', headers,
       body: data === undefined ? undefined : JSON.stringify(data) });
   } catch { throw new Error('连接失败，请检查网络后重试。未保存的答案仍保留在本页。'); }
   const result = await response.json();
   for (const a of Array.isArray(result) ? result : [result]) if (a.serverNow) a.receivedAt = performance.now();
   if (!response.ok) {
-    if (response.status === 401 && state.user) {
+    if (response.status === 401 && user && state.user === user) {
+      rememberEdits();
+      activeRecovery = null;
+      if (dialog.open) dialog.close();
       loadEpoch++; resetDraftSaving(); resetPublish(); state.user = null; state.dirty = false; state.assignment = null; state.assignments = []; state.students = []; state.importResult = null; state.studentQuery = ''; state.passwordStudent = null; state.analyticsData = null; state.calendarData = null; state.calendarBack = null; state.historyData = null; state.reviewData = null; state.mistakes = null; state.correction = null; state.mistakeHistories = {}; render();
+      toast('登录已失效，请用原账号登录后继续。');
     }
-    throw Object.assign(new Error(result.error || '操作失败，请重试'), { status: response.status, code: result.code, draftRevision: result.draftRevision });
+    throw Object.assign(new Error(result.error || '操作失败，请重试'), { status: response.status, code: result.code, draftRevision: result.draftRevision, answers: result.answers });
   }
   return result;
 }
@@ -357,6 +363,7 @@ function render() {
 async function load() {
   if (!state.user) { render(); return; }
   resetDraftSaving();
+  activeRecovery = null;
   const epoch = ++loadEpoch;
   state.loading = true; state.loadError = ''; state.assignment = null; state.passwordStudent = null; state.analyticsData = null; state.calendarData = null; state.calendarBack = null; state.historyData = null; state.reviewData = null; state.mistakes = null; state.correction = null; state.mistakeHistories = {}; render();
   try {
@@ -448,7 +455,13 @@ async function load() {
     }
     state.route = location.hash;
   } catch (e) { if (epoch === loadEpoch) { state.loadError = e.message; toast(e.message, true); } }
-  finally { if (epoch === loadEpoch) { state.loading = false; render(); } }
+  finally {
+    if (epoch === loadEpoch) {
+      state.loading = false;
+      render();
+      if (state.user?.role === 'student' && state.assignment) restoreEdits(state.assignment);
+    }
+  }
 }
 function errorAt(id, message) {
   const el = document.getElementById(id); if (el) el.textContent = message; else toast(message, true);
@@ -489,7 +502,9 @@ root.addEventListener('submit', async event => {
   if (form.id === 'login-form') await formAction(form, 'login-error', async data => {
     resetPublish();
     state.user = await api('/login', 'POST', data); state.dirty = false; state.assignments = []; state.students = []; state.importResult = null; state.studentQuery = ''; state.passwordStudent = null; state.analyticsData = null; state.calendarData = null; state.calendarBack = null; state.historyData = null; state.reviewData = null; state.mistakes = null; state.correction = null; state.mistakeHistories = {}; state.assignment = null;
-    history.replaceState(null, '', '#/'); await load();
+    const assignmentId = routePath().match(/^#\/assignment\/([1-9]\d*)$/)?.[1];
+    const resume = state.user.role === 'student' && assignmentId && readRecovery(recoveryKey(assignmentId));
+    history.replaceState(null, '', resume ? `#/assignment/${assignmentId}` : '#/'); await load();
   });
   if (form.id === 'publish-form') await requestPreview(form);
   if (form.id === 'student-form') await formAction(form, 'student-error', async data => {
@@ -537,14 +552,75 @@ function draftSnapshot(form, assignment) {
   return { answers, invalid };
 }
 const sameAnswers = (left, right) => left.every((value, i) => value === right[i]);
+const memoryRecoveries = new Map();
+let activeRecovery = null;
+const recoveryKey = id => `classwork:unfinished:${state.user.id}:${encodeURIComponent(state.user.username)}:${id}`;
+function readRecovery(key) {
+  if (memoryRecoveries.has(key)) return memoryRecoveries.get(key);
+  try { return localStorage.getItem(key); } catch { return null; }
+}
+function rememberEdits() {
+  const a = state.assignment, form = document.querySelector('#answer-form');
+  if (!state.dirty || state.user?.role !== 'student' || !a || a.submittedAt || !form) return;
+  const values = a.answers.map((saved, i) => {
+    const field = form.elements[`answer-${i}`];
+    // Number inputs do not expose unfinished tokens such as a lone minus sign.
+    return field.validity.badInput ? String(saved ?? '') : field.value;
+  });
+  const key = recoveryKey(a.id);
+  const text = JSON.stringify({ createdAt: a.createdAt, revision: a.draftRevision, values });
+  activeRecovery = { key, text };
+  try { localStorage.setItem(key, text); memoryRecoveries.delete(key); }
+  catch { memoryRecoveries.set(key, text); }
+}
+function forgetEdits() {
+  if (!activeRecovery) return;
+  const { key, text } = activeRecovery;
+  activeRecovery = null;
+  if (readRecovery(key) !== text) return;
+  memoryRecoveries.delete(key);
+  try { if (localStorage.getItem(key) === text) localStorage.removeItem(key); } catch { /* Storage disabled. */ }
+}
+function restoreEdits(a) {
+  const key = recoveryKey(a.id), text = readRecovery(key);
+  if (!text) return;
+  activeRecovery = { key, text };
+  let record;
+  try { record = JSON.parse(text); } catch { forgetEdits(); return; }
+  if (a.submittedAt || record?.createdAt !== a.createdAt || !Number.isSafeInteger(record.revision) || record.revision < 0 ||
+      !Array.isArray(record.values) || record.values.length !== a.questionCount || !record.values.every(v => typeof v === 'string')) {
+    forgetEdits(); return;
+  }
+  const form = document.querySelector('#answer-form');
+  if (!form) return;
+  record.values.forEach((value, i) => { form.elements[`answer-${i}`].value = value; });
+  const { answers, invalid } = draftSnapshot(form, a);
+  const changed = !sameAnswers(answers, a.answers);
+  state.dirty = changed || invalid.length > 0;
+  if (!state.dirty) { forgetEdits(); return; }
+  updateProgress(form);
+  if (changed && record.revision !== a.draftRevision) {
+    const revision = a.draftRevision;
+    a.draftRevision = record.revision;
+    showDraftConflict({ code: 'DRAFT_CONFLICT', draftRevision: revision, answers: a.answers, message: '已恢复上次输入。账号中的草稿已更新，请选择要继续使用的答案。' });
+    return;
+  }
+  saveStatus('已恢复上次输入，正在等待自动保存。');
+  scheduleAutosave();
+}
+function updateProgress(form) {
+  const count = [...form.querySelectorAll('.equation input')].filter(input => input.value !== '').length;
+  document.querySelector('#progress').value = count;
+  document.querySelector('#progress-label').textContent = `已作答 ${count} / ${state.assignment.questionCount} 题`;
+}
 function saveStatus(message) { const node = document.querySelector('#save-state'); if (node) node.textContent = message; }
 function scheduleAutosave(delay = 1000) {
   clearTimeout(autosaveTimer);
-  if (state.user?.role === 'student' && state.assignment && !state.assignment.submittedAt && state.dirty && !state.busy && !draftConflict) autosaveTimer = setTimeout(() => saveDraft(), delay);
+  if (state.user?.role === 'student' && state.assignment && !state.assignment.submittedAt && state.dirty && !draftConflict) autosaveTimer = setTimeout(() => saveDraft(), delay);
 }
 function showDraftConflict(error) {
   clearTimeout(autosaveTimer);
-  draftConflict = { revision: error.draftRevision, submitted: error.code !== 'DRAFT_CONFLICT' };
+  draftConflict = { revision: error.draftRevision, answers: error.answers, submitted: error.code !== 'DRAFT_CONFLICT' };
   const panel = document.querySelector('#draft-conflict');
   if (panel) { panel.hidden = false; panel.querySelector('p').textContent = error.message; panel.querySelector('[data-action="keep-local-draft"]').hidden = draftConflict.submitted; }
   saveStatus('自动保存已暂停 · 本页答案仍保留');
@@ -569,6 +645,8 @@ async function saveDraft(manual = false) {
       const latest = draftSnapshot(form, a);
       retry = !sameAnswers(latest.answers, saved.answers);
       state.dirty = retry || latest.invalid.length > 0;
+      if (!state.dirty) forgetEdits();
+      else if (activeRecovery) rememberEdits();
       draftRetryDelay = 1000;
       if (retry) saveStatus('有新修改，稍后自动保存');
       else if (latest.invalid.length) saveStatus(`第 ${latest.invalid.join('、')} 题需修改，其他答案已保存。`);
@@ -588,25 +666,24 @@ async function saveDraft(manual = false) {
   finally { if (draftFlight === flight) { draftFlight = null; if (current() && retry) scheduleAutosave(draftRetryDelay); } }
 }
 async function saveAndLeave() {
+  if (draftConflict) {
+    document.querySelector('[data-action="load-saved-draft"]')?.focus();
+    return;
+  }
   const form = document.querySelector('#answer-form'), a = state.assignment;
   state.busy = true;
   try {
     // Edits made while a previous save was in flight must reach the server too.
     let latest;
     do {
-      if (!await saveDraft(true) || !form.isConnected) {
-        if (form.isConnected && !draftConflict) {
-          state.busy = false;
-          scheduleAutosave(draftRetryDelay);
-        }
-        return;
-      }
+      if (!await saveDraft(true) || !form.isConnected) return;
       latest = draftSnapshot(form, a);
     } while (!sameAnswers(latest.answers, a.answers));
     if (latest.invalid.length && !confirm(`其他答案已保存。第 ${latest.invalid.join('、')} 题的输入无效，离开后这几题将保留上次保存的答案。确定离开吗？`)) {
       form.reportValidity();
       return;
     }
+    forgetEdits();
     state.dirty = false;
     location.hash = '#/';
   } finally { state.busy = false; }
@@ -627,7 +704,7 @@ async function submitAnswers() {
     if (!state.assignment || !form.isConnected) return;
     if (draftConflict) { errorAt('answer-error', '请先处理草稿冲突，再确认交卷。本页答案仍保留。'); return; }
     state.assignment = await api(`/assignments/${state.assignment.id}/submit`, 'POST', { answers, draftRevision: state.assignment.draftRevision, allowIncomplete: answers.includes(null) });
-    state.dirty = false; render(); toast('作业已提交，批改结果出来啦！');
+    forgetEdits(); state.dirty = false; render(); toast('作业已提交，批改结果出来啦！');
   } catch (e) {
     if (e.code === 'DRAFT_CONFLICT') showDraftConflict(e);
     else if (e.status === 409 && e.message.includes('已截止')) state.assignment.isClosed = true;
@@ -641,10 +718,7 @@ root.addEventListener('input', event => {
   if (event.target.closest('#publish-form')) { syncPracticeFields(); publishChanged(); }
   if (event.target.closest('#answer-form')) {
     state.dirty = true;
-    const inputs = [...document.querySelectorAll('.equation input')];
-    const count = inputs.filter(input => input.value !== '').length;
-    document.querySelector('#progress').value = count;
-    document.querySelector('#progress-label').textContent = `已作答 ${count} / ${state.assignment.questionCount} 题`;
+    updateProgress(event.target.form);
     saveStatus(draftConflict ? '自动保存已暂停 · 本页答案仍保留' : '有未保存的修改，停笔后自动保存');
     scheduleAutosave();
   }
@@ -685,9 +759,11 @@ root.addEventListener('change', async event => {
 root.addEventListener('click', async event => {
   const action = event.target.closest('[data-action]')?.dataset.action;
   if (state.busy && (event.target.closest('a') || action)) { event.preventDefault(); return; }
-  if (action === 'load-saved-draft' && confirm('将载入已保存的答案，放弃本页尚未保存的修改。确定继续吗？')) { state.dirty = false; await load(); }
+  if (action === 'load-saved-draft' && confirm('将载入已保存的答案，放弃本页尚未保存的修改。确定继续吗？')) { forgetEdits(); state.dirty = false; await load(); }
   if (action === 'keep-local-draft' && draftConflict && !draftConflict.submitted && confirm('将以本页答案替换其他窗口已保存的草稿。确定保留本页答案吗？')) {
-    state.assignment.draftRevision = draftConflict.revision; draftConflict = null; document.querySelector('#draft-conflict').hidden = true; await saveDraft(true);
+    state.assignment.draftRevision = draftConflict.revision;
+    state.assignment.answers = draftConflict.answers ?? state.assignment.answers;
+    draftConflict = null; document.querySelector('#draft-conflict').hidden = true; await saveDraft(true);
   }
   if (action === 'analytics-list') document.querySelector('#analytics-list')?.scrollIntoView?.({ block: 'start' });
   if (event.target.closest('[data-analytics-question]')?.getAttribute('href') === location.hash) { event.preventDefault(); document.querySelector('#analytics-detail')?.scrollIntoView?.({ block: 'start' }); }
@@ -724,11 +800,11 @@ root.addEventListener('click', async event => {
     catch (e) { errorAt('start-error', e.message); }
     finally { state.busy = false; }
   }
-  if (action === 'refresh' && (!state.dirty || confirm('还有未保存的答案。确定重新加载并放弃这些修改吗？'))) { state.dirty = false; await load(); }
+  if (action === 'refresh' && (!state.dirty || confirm('还有未保存的答案。确定重新加载并放弃这些修改吗？'))) { forgetEdits(); state.dirty = false; await load(); }
   if (action === 'logout') {
     if (state.dirty && !confirm('还有未保存的答案。确定退出并放弃这些修改吗？')) return;
     state.busy = true;
-    try { await api('/logout', 'POST', {}); loadEpoch++; resetDraftSaving(); resetPublish(); state.user = null; state.assignment = null; state.assignments = []; state.students = []; state.importResult = null; state.studentQuery = ''; state.passwordStudent = null; state.analyticsData = null; state.calendarData = null; state.calendarBack = null; state.historyData = null; state.reviewData = null; state.mistakes = null; state.correction = null; state.mistakeHistories = {}; state.dirty = false; history.replaceState(null, '', '#/'); render(); }
+    try { await api('/logout', 'POST', {}); forgetEdits(); loadEpoch++; resetDraftSaving(); resetPublish(); state.user = null; state.assignment = null; state.assignments = []; state.students = []; state.importResult = null; state.studentQuery = ''; state.passwordStudent = null; state.analyticsData = null; state.calendarData = null; state.calendarBack = null; state.historyData = null; state.reviewData = null; state.mistakes = null; state.correction = null; state.mistakeHistories = {}; state.dirty = false; history.replaceState(null, '', '#/'); render(); }
     catch (e) { toast(e.message, true); }
     finally { state.busy = false; }
   }
@@ -741,13 +817,15 @@ window.addEventListener('hashchange', async () => {
   if (state.busy || (state.dirty && !confirm('还有未保存的答案。确定离开并放弃这些修改吗？'))) {
     reverting = true; location.hash = state.route || '#/'; return;
   }
-  state.dirty = false; await load();
+  forgetEdits(); state.dirty = false; await load();
   if (document.querySelector('.source-question')) document.querySelector('.source-question').scrollIntoView?.({ block: 'center' });
   else if (routePath() === '#/analytics' && state.analyticsData?.selectedQuestion) document.querySelector('#analytics-detail')?.scrollIntoView?.({ block: 'start' });
   else if (routePath() === '#/calendar' && new URLSearchParams(location.hash.split('?')[1] ?? '').has('day')) document.querySelector('.calendar-daily')?.scrollIntoView?.({ block: 'start' });
   else window.scrollTo(0, 0);
 });
 window.addEventListener('beforeunload', event => { if (state.dirty || state.busy) { event.preventDefault(); event.returnValue = ''; } });
+window.addEventListener('pagehide', rememberEdits);
+document.addEventListener('visibilitychange', () => { if (document.hidden) rememberEdits(); });
 try { state.user = await api('/me'); } catch (e) { if (!e.message.includes('请先登录')) toast(e.message, true); }
 await load();
 

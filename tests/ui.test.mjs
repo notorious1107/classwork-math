@@ -788,6 +788,82 @@ test('停笔自动保存零答案，保存中继续输入不丢失，旧版草�
   },createRevisionClass);
 });
 
+test('单题超范围时自动保存其他题，保存并离开可选择修正或保留原值', async () => {
+  await withPages(async ({ app, page, login }) => {
+    const { ids } = seedAnalytics(app.db);
+    const id = publishAssignment(app.db, '先保存会做的题');
+    const pupil = await page();
+    await login(pupil, 'lin', 'Teacher123!');
+    const open = async () => {
+      pupil.click(`a[href="#/assignment/${id}"]`);
+      await waitFor(() => pupil.d.querySelector('#answer-form'), '打开草稿');
+    };
+    const saved = () => app.db.prepare('SELECT * FROM submissions WHERE assignment_id=? AND student_id=?').get(id, ids.lin);
+    await open();
+    pupil.fill('answer-0', 8);
+    pupil.fill('answer-2', 3);
+    pupil.click('[data-action="save"]');
+    await waitFor(() => pupil.d.querySelector('#save-state').textContent.startsWith('已保存'), '保存原答案');
+    pupil.fill('answer-0', 200);
+    pupil.fill('answer-1', 0);
+    pupil.fill('answer-2', '');
+    await waitFor(() => pupil.d.querySelector('#save-state').textContent.includes('第 1 题需修改'), '提示具体题号');
+    assert.equal(pupil.d.querySelector('#answer-0').value, '200');
+    assert.deepEqual(JSON.parse(saved().answers).slice(0, 3), [8, 0, null]);
+    pupil.click('[data-submit]');
+    assert.equal(pupil.d.querySelector('dialog').open, false);
+    let confirmation;
+    pupil.w.confirm = message => { confirmation = message; return false; };
+    pupil.click('[data-action="save-leave"]');
+    await waitFor(() => confirmation, '留页修改');
+    assert.match(confirmation, /第 1 题/);
+    assert.equal(pupil.d.querySelector('#answer-0').value, '200');
+    pupil.w.confirm = () => true;
+    pupil.click('[data-action="save-leave"]');
+    await waitFor(() => pupil.d.querySelector('.student-card'), '确认跳过无效输入后离开');
+    await open();
+    assert.deepEqual([0, 1, 2].map(i => pupil.d.querySelector(`#answer-${i}`).value), ['8', '0', '']);
+    assert.equal(saved().submitted_at, null);
+    assert.equal(saved().score, null);
+  });
+});
+
+test('保存并离开等待进行中的写入和最新修改，断网时留在作业页', async () => {
+  await withPages(async ({ app, page, login }) => {
+    const { ids } = seedAnalytics(app.db);
+    const id = publishAssignment(app.db, '保存最新修改');
+    const pupil = await page();
+    await login(pupil, 'lin', 'Teacher123!');
+    pupil.click(`a[href="#/assignment/${id}"]`);
+    await waitFor(() => pupil.d.querySelector('#answer-form'), '打开作业');
+    pupil.session.failPath = '/draft';
+    pupil.fill('answer-0', 1);
+    pupil.click('[data-action="save-leave"]');
+    await waitFor(() => pupil.d.querySelector('#answer-error')?.textContent.includes('连接失败'), '断网留页');
+    assert.equal(pupil.d.querySelector('#answer-0').value, '1');
+    pupil.session.failPath = '';
+    const original = pupil.w.fetch;
+    let release;
+    pupil.w.fetch = async (path, options) => {
+      const response = await original(path, options);
+      if (path.endsWith('/draft') && !release) await new Promise(resolve => { release = resolve; });
+      return response;
+    };
+    pupil.click('[data-action="save"]');
+    await waitFor(() => release, '服务器已写入，回包尚未返回');
+    pupil.fill('answer-1', 0);
+    pupil.click('[data-action="save-leave"]');
+    pupil.click('[data-action="save-leave"]');
+    assert.ok(pupil.d.querySelector('#answer-form'));
+    release();
+    await waitFor(() => pupil.d.querySelector('.student-card'), '最新修改写入后离开');
+    const stored = app.db.prepare('SELECT * FROM submissions WHERE assignment_id=? AND student_id=?').get(id, ids.lin);
+    assert.deepEqual(JSON.parse(stored.answers).slice(0, 2), [1, 0]);
+    assert.equal(stored.draft_revision, 2);
+    assert.equal(stored.submitted_at, null);
+  });
+});
+
 test('自动草稿断网和响应丢失保留输入可重试，到截止后仍自动保存且保持未交',async()=>{
   await withPages(async({app,page,login})=>{
     const ids=seedAnalytics(app.db), id=publishAssignment(app.db,'逾期仍自动保存',{dueAt:'2020-01-01T00:00:00Z'}),pupil=await page();await login(pupil,'lin','Teacher123!');

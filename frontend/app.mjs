@@ -330,8 +330,8 @@ function workbook(a) {
   const count = a.answers.filter(v => v !== null).length;
   return `<a class="back-link" href="${original ? '#/mistakes' : '#/'}">← 返回${original ? '我的错题本' : '我的作业'}</a>${sourceNote}<div class="workbook-heading">${pageTitle(done ? '练习完成' : '专心算一算', esc(a.title), `${assignmentSummary(a)} · 每题 ${100 / a.questionCount} 分 · ${a.category === 'composite' ? '按每题标注的范围填写整数' : `答案是 0–${a.answerMax} 的整数`} · ${deadline(a)}`)}${done ? `<div class="score-stamp"><strong>${a.score}</strong><span>/ 100 分</span></div>` : ''}</div>
     ${done ? `<div class="result-banner"><strong>${a.score === 100 ? '全部答对，真棒！' : `答对了 ${a.results.filter(r => r.correct).length} / ${a.questionCount} 道题，再看看需要订正的地方。`}</strong><span>${date(a.submittedAt)} 提交 · 已自动批改</span></div>` : `<div class="progress-heading"><span id="progress-label">已作答 ${count} / ${a.questionCount} 题</span><span id="save-state" class="muted" role="status" aria-live="polite">${a.savedAt ? `草稿保存于 ${date(a.savedAt)}` : '停笔一会儿会自动保存，也可手动保存。'}</span></div><progress id="progress" max="${a.questionCount}" value="${count}" aria-label="作答进度"></progress>`}
-    ${a.timeLimitMinutes && !done ? `<div class="timer-panel"><strong id="countdown" role="timer"></strong><span>开始于 ${date(a.startedAt)} · 最晚 ${date(a.effectiveDueAt)}（北京时间）</span></div>` : ''}<p id="deadline-state" class="deadline-message" role="status" hidden></p>${!done ? '<section id="draft-conflict" class="draft-conflict" role="alert" hidden><p></p><div class="actions"><button class="button secondary" data-action="load-saved-draft">载入已保存草稿</button><button class="button" data-action="keep-local-draft">保留本页答案并保存</button></div></section>' : ''}<form id="answer-form"><fieldset ${done ? 'disabled' : ''}><legend class="sr-only">${a.questionCount} 道计算题</legend><div class="question-grid">${a.expressions.map((expression, i) => `<div data-original-question="${i + 1}" class="question ${original && Number(original[2]) === i + 1 ? 'source-question' : ''} ${done ? (a.results[i].correct ? 'correct' : 'incorrect') : ''}"><span class="question-number">第 ${i + 1} 题${a.category === 'composite' ? ` · 答案 0–${a.answerMaxes[i]}` : ''}</span><div class="equation"><label for="answer-${i}"><span class="sr-only">第 ${i + 1} 题：</span>${esc(expression)} <span class="operator">＝</span></label><input id="answer-${i}" name="answer-${i}" type="number" min="0" max="${a.answerMaxes?.[i] ?? a.answerMax}" step="1" inputmode="numeric" autocomplete="off" aria-label="第 ${i + 1} 题答案" value="${esc(a.answers[i])}" ${done ? 'readonly' : ''}></div>${done ? `<div class="question-feedback">${a.results[i].missing ? `漏答 · 正确答案：${a.results[i].correctAnswer}` : a.results[i].correct ? '✓ 答对了' : `✕ 正确答案：${a.results[i].correctAnswer}`}</div>` : ''}</div>`).join('')}</div></fieldset>
-    ${done ? '<div class="actions result-actions"><a class="button secondary" href="#/">返回我的作业</a><span class="muted">作业已提交，答案不能再修改。</span></div>' : `<div class="answer-actions"><div><strong>慢慢算，认真检查。</strong><p class="small muted">保存草稿后，下次登录可以接着写。</p></div><div class="actions"><button type="button" class="button secondary" data-action="save">保存草稿</button><button type="submit" class="button" data-submit>提交作业 →</button></div></div><p id="answer-error" class="form-error" role="alert"></p>`}</form>`;
+    ${a.timeLimitMinutes && !done ? `<div class="timer-panel"><strong id="countdown" role="timer"></strong><span>开始于 ${date(a.startedAt)} · 最晚 ${date(a.effectiveDueAt)}（北京时间）</span></div>` : ''}<p id="deadline-state" class="deadline-message" role="status" hidden></p>${!done ? '<section id="draft-conflict" class="draft-conflict" role="alert" hidden><p></p><div class="actions"><button class="button secondary" data-action="load-saved-draft">载入已保存草稿</button><button class="button" data-action="keep-local-draft">保留本页答案并保存</button></div></section>' : ''}<form id="answer-form"><fieldset ${done ? 'disabled' : ''}><legend class="sr-only">${a.questionCount} 道计算题</legend><div class="question-grid">${a.expressions.map((expression, i) => `<div data-original-question="${i + 1}" class="question ${original && Number(original[2]) === i + 1 ? 'source-question' : ''} ${done ? (a.results[i].correct ? 'correct' : 'incorrect') : ''}"><span class="question-number">第 ${i + 1} 题${a.category === 'composite' ? ` · 答案 0–${a.answerMaxes[i]}` : ''}</span><div class="equation"><label for="answer-${i}"><span class="sr-only">第 ${i + 1} 题：</span>${esc(expression)} <span class="operator">＝</span></label><input id="answer-${i}" name="answer-${i}" type="number" min="0" max="${a.answerMaxes?.[i] ?? a.answerMax}" step="1" inputmode="numeric" autocomplete="off" aria-label="第 ${i + 1} 题答案" ${done ? '' : `aria-describedby="hint-${i}"`} value="${esc(a.answers[i])}" ${done ? 'readonly' : ''}></div>${done ? `<div class="question-feedback">${a.results[i].missing ? `漏答 · 正确答案：${a.results[i].correctAnswer}` : a.results[i].correct ? '✓ 答对了' : `✕ 正确答案：${a.results[i].correctAnswer}`}</div>` : `<span id="hint-${i}" class="draft-hint">请填写 0–${a.answerMaxes?.[i] ?? a.answerMax} 的整数。其他题可先保存。</span>`}</div>`).join('')}</div></fieldset>
+    ${done ? '<div class="actions result-actions"><a class="button secondary" href="#/">返回我的作业</a><span class="muted">作业已提交，答案不能再修改。</span></div>' : `<div class="answer-actions"><div><strong>慢慢算，认真检查。</strong><p class="small muted">保存草稿后，下次登录可以接着写。</p></div><div class="actions"><button type="button" class="button secondary" data-action="save">保存草稿</button><button type="button" class="button secondary" data-action="save-leave">保存并离开</button><button type="submit" class="button" data-submit>提交作业 →</button></div></div><p id="answer-error" class="form-error" role="alert"></p>`}</form>`;
 }
 function render() {
   let view;
@@ -514,7 +514,7 @@ root.addEventListener('submit', async event => {
   });
   if (form.id === 'answer-form' && !state.busy) {
     if (closed(state.assignment)) { syncDeadlineUI(); errorAt('answer-error', closedMessage); }
-    else {
+    else if (form.reportValidity()) {
       const missing = readAnswers(form).filter(a => a === null).length, message = document.querySelector('#submit-missing');
       message.hidden = !missing;
       message.textContent = missing ? `还有 ${missing} 题没答。可以返回补答，也能确认按现有答案交卷；空题记为漏答，按整张卷的题数计分。` : '';
@@ -526,6 +526,17 @@ root.addEventListener('submit', async event => {
 function readAnswers(form = document.querySelector('#answer-form')) {
   return Array.from({ length: state.assignment.questionCount }, (_, i) => { const value = form.elements[`answer-${i}`].value; return value === '' ? null : Number(value); });
 }
+function draftSnapshot(form, assignment) {
+  const invalid = [];
+  const answers = assignment.answers.map((saved, i) => {
+    const input = form.elements[`answer-${i}`];
+    if (input.validity.valid) return input.value === '' ? null : Number(input.value);
+    invalid.push(i + 1);
+    return saved;
+  });
+  return { answers, invalid };
+}
+const sameAnswers = (left, right) => left.every((value, i) => value === right[i]);
 function saveStatus(message) { const node = document.querySelector('#save-state'); if (node) node.textContent = message; }
 function scheduleAutosave(delay = 1000) {
   clearTimeout(autosaveTimer);
@@ -539,13 +550,15 @@ function showDraftConflict(error) {
   saveStatus('自动保存已暂停 · 本页答案仍保留');
 }
 async function saveDraft(manual = false) {
-  if (!state.assignment || state.assignment.submittedAt || state.user?.role !== 'student' || state.busy || draftConflict) return false;
+  if (!state.assignment || state.assignment.submittedAt || state.user?.role !== 'student' || (state.busy && !manual) || draftConflict) return false;
   clearTimeout(autosaveTimer);
-  if (draftFlight) { await draftFlight; return manual && state.dirty ? saveDraft(true) : !state.dirty; }
+  if (draftFlight) return draftFlight;
   const form = document.querySelector('#answer-form');
-  if (!form || !(manual ? form.reportValidity() : form.checkValidity())) { saveStatus('答案格式有误，请修正后保存'); return false; }
-  const answers = readAnswers(form), epoch = loadEpoch, a = state.assignment, button = form.querySelector('[data-action="save"]');
+  if (!form) return false;
+  const a = state.assignment, { answers } = draftSnapshot(form, a);
+  const epoch = loadEpoch, button = form.querySelector('[data-action="save"]');
   const current = () => epoch === loadEpoch && state.assignment === a && form.isConnected;
+  let retry = false;
   saveStatus('正在保存草稿…'); if (button) button.disabled = true;
   errorAt('answer-error', '');
   const flight = (async () => {
@@ -553,26 +566,54 @@ async function saveDraft(manual = false) {
       const saved = await api(`/assignments/${a.id}/draft`, 'PUT', { answers, draftRevision: a.draftRevision });
       if (!current()) return false;
       a.answers = saved.answers; a.savedAt = saved.savedAt; a.draftRevision = saved.draftRevision;
-      state.dirty = JSON.stringify(readAnswers(form)) !== JSON.stringify(answers); draftRetryDelay = 1000;
-      saveStatus(state.dirty ? '有新修改，稍后自动保存' : `已保存 · 草稿保存于 ${date(saved.savedAt)}`);
+      const latest = draftSnapshot(form, a);
+      retry = !sameAnswers(latest.answers, saved.answers);
+      state.dirty = retry || latest.invalid.length > 0;
+      draftRetryDelay = 1000;
+      if (retry) saveStatus('有新修改，稍后自动保存');
+      else if (latest.invalid.length) saveStatus(`第 ${latest.invalid.join('、')} 题需修改，其他答案已保存。`);
+      else saveStatus(`已保存 · 草稿保存于 ${date(saved.savedAt)}`);
       if (manual && !state.dirty) toast('草稿已保存，下次可以接着写。');
       return true;
     } catch (e) {
       if (!current()) return false;
       errorAt('answer-error', e.message);
       if (e.status === 409) showDraftConflict(e);
-      else { saveStatus('保存失败 · 本页答案仍保留，将自动重试'); draftRetryDelay = Math.min(30000, Math.max(3000, draftRetryDelay * 2)); }
+      else { retry = true; saveStatus('保存失败 · 本页答案仍保留，将自动重试'); draftRetryDelay = Math.min(30000, Math.max(3000, draftRetryDelay * 2)); }
       return false;
     } finally { if (current() && button) button.disabled = false; }
   })();
   draftFlight = flight;
   try { return await flight; }
-  finally { if (draftFlight === flight) { draftFlight = null; if (current()) scheduleAutosave(draftRetryDelay); } }
+  finally { if (draftFlight === flight) { draftFlight = null; if (current() && retry) scheduleAutosave(draftRetryDelay); } }
 }
-async function saveAnswers(submit = false) {
-  if (!submit) return saveDraft(true);
+async function saveAndLeave() {
+  const form = document.querySelector('#answer-form'), a = state.assignment;
+  state.busy = true;
+  try {
+    // Edits made while a previous save was in flight must reach the server too.
+    let latest;
+    do {
+      if (!await saveDraft(true) || !form.isConnected) {
+        if (form.isConnected && !draftConflict) {
+          state.busy = false;
+          scheduleAutosave(draftRetryDelay);
+        }
+        return;
+      }
+      latest = draftSnapshot(form, a);
+    } while (!sameAnswers(latest.answers, a.answers));
+    if (latest.invalid.length && !confirm(`其他答案已保存。第 ${latest.invalid.join('、')} 题的输入无效，离开后这几题将保留上次保存的答案。确定离开吗？`)) {
+      form.reportValidity();
+      return;
+    }
+    state.dirty = false;
+    location.hash = '#/';
+  } finally { state.busy = false; }
+}
+async function submitAnswers() {
   if (state.busy || !state.assignment || state.assignment.submittedAt) return;
-  if (submit && closed(state.assignment)) { syncDeadlineUI(); errorAt('answer-error', closedMessage); return; }
+  if (closed(state.assignment)) { syncDeadlineUI(); errorAt('answer-error', closedMessage); return; }
   const form = document.querySelector('#answer-form');
   if (!form.reportValidity()) return;
   const answers = readAnswers(form);
@@ -586,7 +627,7 @@ async function saveAnswers(submit = false) {
     if (!state.assignment || !form.isConnected) return;
     if (draftConflict) { errorAt('answer-error', '请先处理草稿冲突，再确认交卷。本页答案仍保留。'); return; }
     state.assignment = await api(`/assignments/${state.assignment.id}/submit`, 'POST', { answers, draftRevision: state.assignment.draftRevision, allowIncomplete: answers.includes(null) });
-    state.dirty = false; render(); toast(submit ? '作业已提交，批改结果出来啦！' : '草稿已保存，下次可以接着写。');
+    state.dirty = false; render(); toast('作业已提交，批改结果出来啦！');
   } catch (e) {
     if (e.code === 'DRAFT_CONFLICT') showDraftConflict(e);
     else if (e.status === 409 && e.message.includes('已截止')) state.assignment.isClosed = true;
@@ -650,7 +691,8 @@ root.addEventListener('click', async event => {
   }
   if (action === 'analytics-list') document.querySelector('#analytics-list')?.scrollIntoView?.({ block: 'start' });
   if (event.target.closest('[data-analytics-question]')?.getAttribute('href') === location.hash) { event.preventDefault(); document.querySelector('#analytics-detail')?.scrollIntoView?.({ block: 'start' }); }
-  if (action === 'save') await saveAnswers();
+  if (action === 'save') await saveDraft(true);
+  if (action === 'save-leave') await saveAndLeave();
   if (action === 'confirm-preview') await confirmPreview();
   if (action === 'replace-preview') { const form = document.querySelector('#publish-form'); if (form.reportValidity()) await requestPreview(form); }
   if (action === 'edit-preview') { document.querySelector('#publish-form')?.scrollIntoView?.({ block: 'start' }); document.querySelector('#publish-form [name="title"]')?.focus(); }
@@ -692,7 +734,7 @@ root.addEventListener('click', async event => {
   }
 });
 document.querySelector('#cancel-submit').addEventListener('click', () => dialog.close());
-document.querySelector('#confirm-submit').addEventListener('click', async () => { dialog.close(); await saveAnswers(true); });
+document.querySelector('#confirm-submit').addEventListener('click', async () => { dialog.close(); await submitAnswers(); });
 let reverting = false;
 window.addEventListener('hashchange', async () => {
   if (reverting) { reverting = false; return; }
